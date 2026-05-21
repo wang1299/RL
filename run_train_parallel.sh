@@ -12,13 +12,14 @@ export HF_ENDPOINT=https://hf-mirror.com
 export PYTHONPATH=$PYTHONPATH:$(pwd):/home/wgy/GroundingDINO
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Keep physical GPU 0 completely unused by masking visible devices to 4,5,6,7.
+# Use physical GPUs 4,5,6,7 by masking visible devices to that set.
 # Inside the process, these map to logical CUDA devices 0,1,2,3.
 export CUDA_VISIBLE_DEVICES="4,5,6,7"
 export RL_GPU_IDS="3"
 export DINO_DEVICE="cuda:0"
 export DINO_DEVICES="cuda:0,cuda:1,cuda:2"
 export ENV_GPU_IDS="0,1,2"
+export WORKERS_PER_ENV_GPU="${WORKERS_PER_ENV_GPU:-4}"
 
 # Get timestamp for log file naming
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -34,9 +35,13 @@ echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Visualization directory: $VIZ_DIR"
 echo "[INFO] RL_GPU_IDS: $RL_GPU_IDS"
 echo "[INFO] ENV_GPU_IDS: $ENV_GPU_IDS"
+echo "[INFO] WORKERS_PER_ENV_GPU: $WORKERS_PER_ENV_GPU"
 echo "[INFO] DINO_DEVICE: $DINO_DEVICE"
 echo "[INFO] DINO_DEVICES: $DINO_DEVICES"
 echo "[INFO] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
+    echo "[INFO] POLICY_CHECKPOINT_LOAD: $POLICY_CHECKPOINT_LOAD"
+fi
 echo "[INFO] Logical GPU mapping: cuda:0->physical 4, cuda:1->physical 5, cuda:2->physical 6, cuda:3->physical 7"
 echo "[INFO] Habitat workers and DINO use logical GPUs 0,1,2; policy/update uses logical GPU 3"
 
@@ -47,10 +52,15 @@ HABITAT_SCENES="00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,00023-zepmXAdrpjR,00031-Wo6k
 SCENE_COUNT=$(echo "$HABITAT_SCENES" | tr ',' '\n' | wc -l)
 echo "[INFO] Training on $SCENE_COUNT scenes"
 
+EXTRA_ARGS=()
+if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
+    EXTRA_ARGS+=(--policy_checkpoint_load "$POLICY_CHECKPOINT_LOAD")
+fi
+
 # Run training with nohup
 nohup /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_parallel.py \
     --conf_path /home/wgy/RL/config \
-    --num_workers 4 \
+    --num_workers "$WORKERS_PER_ENV_GPU" \
     --episodes 100 \
     --num_steps 4000 \
     --gpu_ids "$RL_GPU_IDS" \
@@ -61,6 +71,8 @@ nohup /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_parall
     --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
     --habitat_scenes "$HABITAT_SCENES" \
     --save_frames_to "$VIZ_DIR" \
+    --save_model_to /home/wgy/RL/RL_training/runs/model_weights \
+    "${EXTRA_ARGS[@]}" \
     > "$LOG_FILE" 2>&1 &
 
 PID=$!

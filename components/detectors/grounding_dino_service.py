@@ -69,6 +69,9 @@ class GroundingDINOService:
         box_threshold: float = 0.35,
         text_threshold: float = 0.25,
         device: Optional[str] = None,
+        excluded_labels: Optional[List[str]] = None,
+        max_box_area_ratio: float = 1.0,
+        max_box_aspect_ratio: float = 100.0,
     ):
         self.mp_ctx = mp.get_context("spawn")
         self.task_queue = self.mp_ctx.Queue()
@@ -88,6 +91,9 @@ class GroundingDINOService:
                     "box_threshold": box_threshold,
                     "text_threshold": text_threshold,
                     "device": device,
+                    "excluded_labels": excluded_labels,
+                    "max_box_area_ratio": max_box_area_ratio,
+                    "max_box_aspect_ratio": max_box_aspect_ratio,
                 },
             ),
             daemon=False,
@@ -161,6 +167,9 @@ class GroundingDINOServicePool:
         devices: List[str],
         box_threshold: float = 0.35,
         text_threshold: float = 0.25,
+        excluded_labels: Optional[List[str]] = None,
+        max_box_area_ratio: float = 1.0,
+        max_box_aspect_ratio: float = 100.0,
     ):
         if not devices:
             raise ValueError("GroundingDINOServicePool requires at least one device")
@@ -173,6 +182,9 @@ class GroundingDINOServicePool:
                 box_threshold=box_threshold,
                 text_threshold=text_threshold,
                 device=device,
+                excluded_labels=excluded_labels,
+                max_box_area_ratio=max_box_area_ratio,
+                max_box_aspect_ratio=max_box_aspect_ratio,
             )
             for device in devices
         ]

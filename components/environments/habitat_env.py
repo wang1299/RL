@@ -1,6 +1,7 @@
 import habitat_sim
 import numpy as np
 import os
+import glob
 import random
 import csv
 import sys
@@ -186,7 +187,7 @@ class HabitatEnv:
         use_detector=False,
         detector=None,
         det_score_thr=0.3,
-        score_norm_target=120.0,
+        score_norm_target=None,
         instance_merge_dist=0.8,
         coverage_cell_size=0.5,
         nav_sample_points=4000,
@@ -200,11 +201,16 @@ class HabitatEnv:
         rho=0.1,
         coverage_bonus_scale=2.0,
         discovery_bonus_scale=1.0,
+        new_cell_reward=0.0,
         collision_penalty=0.05,
+        dino_max_box_area_ratio=1.0,
+        dino_max_box_aspect_ratio=100.0,
         gt_validation_iou_threshold=0.10,
         gt_validation_mode="relaxed",
-        success_recall_threshold=0.90,
+        success_recall_threshold=1.00,
+        success_min_coverage=0.30,
         success_reward=10.0,
+        reward_allow_semantic_iou_only=False,
         reward_excluded_labels=None,
         max_actions=40,
         save_debug_interval=100,
@@ -240,7 +246,6 @@ class HabitatEnv:
         self.use_detector = use_detector
         self.detector = detector
         self.det_score_thr = det_score_thr
-        self.score_norm_target = max(float(score_norm_target), 1.0)
         self.instance_merge_dist = max(float(instance_merge_dist), 1e-6)
         self.coverage_cell_size = max(float(coverage_cell_size), 1e-6)
         self.nav_sample_points = max(int(nav_sample_points), 200)
@@ -252,11 +257,20 @@ class HabitatEnv:
         self.navmesh_cell_size = max(float(navmesh_cell_size), 1e-6)
         self.coverage_bonus_scale = float(coverage_bonus_scale)
         self.discovery_bonus_scale = float(discovery_bonus_scale)
+        self.new_cell_reward = max(float(new_cell_reward), 0.0)
         self.collision_penalty = max(float(collision_penalty), 0.0)
+        self.dino_max_box_area_ratio = float(dino_max_box_area_ratio)
+        if self.dino_max_box_area_ratio <= 0:
+            self.dino_max_box_area_ratio = 1.0
+        self.dino_max_box_aspect_ratio = float(dino_max_box_aspect_ratio)
+        if self.dino_max_box_aspect_ratio <= 0:
+            self.dino_max_box_aspect_ratio = 100.0
         self.gt_validation_iou_threshold = max(float(gt_validation_iou_threshold), 0.0)
         self.gt_validation_mode = str(gt_validation_mode or "relaxed").lower()
         self.success_recall_threshold = float(success_recall_threshold)
+        self.success_min_coverage = float(success_min_coverage)
         self.success_reward = float(success_reward)
+        self.reward_allow_semantic_iou_only = bool(reward_allow_semantic_iou_only)
         if reward_excluded_labels is None:
             reward_excluded_labels = _DEFAULT_REWARD_EXCLUDED_LABELS
         self.reward_excluded_labels = {str(label) for label in reward_excluded_labels}
@@ -269,6 +283,10 @@ class HabitatEnv:
         self.traj_pixels_all = deque()
         self.semantic_id_to_label = {}
         self.scene_reward_gt_ids = set()
+        self.semantic_label_source = None
+        self.discovered_objects = set()
+        self.discovered_instances = set()
+        self.discovered_gt_ids = set()
         self.last_action_name = None
         self.last_start_position_by_scene = {}
         self._last_rgb = None
@@ -417,6 +435,7 @@ class HabitatEnv:
         self.scene_id = scene_id
         self.semantic_id_to_label = self._build_semantic_id_label_map()
         self.scene_reward_gt_ids = self._build_scene_reward_gt_ids()
+        self._warn_if_missing_reward_gt()
         self.total_navigable_cells = None
         self.topdown_base_img = None
         self.topdown_bounds = None
@@ -508,6 +527,7 @@ class HabitatEnv:
         self.step_count = 0
         self.discovered_objects = set()
         self.discovered_instances = set()
+        self.discovered_gt_ids = set()
         self.visited_cells = set()
         self.traj_pixels.clear()
         self.prev_score = 0.0
@@ -586,7 +606,7 @@ class HabitatEnv:
             os.makedirs(self.current_ep_dir, exist_ok=True)
             with open(self.trajectory_csv, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["step", "x", "y", "z", "yaw_deg", "score", "coverage", "num_instances"])
+                writer.writerow(["step", "x", "y", "z", "yaw_deg", "score", "coverage", "num_discovered_gt", "num_instances"])
 
         return self._process_obs(obs, is_reset=True)
 
@@ -639,6 +659,8 @@ class HabitatEnv:
                          continue
                      if det.get("is_gt_valid") is not True:
                          continue
+                     if not self.reward_allow_semantic_iou_only and det.get("gt_match_mode") == "semantic_iou_only":
+                         continue
                      label = det.get("canonical_label") or det.get("label", "unknown")
                      if label in self.reward_excluded_labels:
                          continue
@@ -649,6 +671,8 @@ class HabitatEnv:
                      if self.scene_reward_gt_ids and gt_semantic_id not in self.scene_reward_gt_ids:
                          continue
                      self.discovered_objects.add(label)
+                     self.discovered_gt_ids.add(gt_semantic_id)
+                     # Kept for diagnostics only; score/reward use GT semantic IDs.
                      self.discovered_instances.add(self._build_instance_key(det, label))
              except Exception as e:
                  print(f"Warning: Detector failed: {e}")
@@ -740,14 +764,12 @@ class HabitatEnv:
             except Exception as e:
                 print(f"Failed to save viz frame: {e}")
 
-        truncated = self.step_count >= self.max_actions
-        terminated = False
-
         # Track trajectory and occupancy-like coverage from visited world cells.
         ax = float(agent_state.position[0])
         ay = float(agent_state.position[1])
         az = float(agent_state.position[2])
         cell = self._quantize_world_cell(ax, az)
+        is_new_cell = cell not in self.visited_cells
         self.visited_cells.add(cell)
         denom = max(self.total_navigable_cells or 1, 1)
         coverage = min(len(self.visited_cells) / denom, 1.0)
@@ -760,10 +782,21 @@ class HabitatEnv:
         self.prev_agent_position = (ax, az)
         
         # Give reward for discovery, coverage expansion and penalty for wasted motion.
+        target_gt_count = len(getattr(self, "scene_reward_gt_ids", set()))
+        discovered_gt_count = len(self.discovered_gt_ids)
         discovered_instance_count = len(self.discovered_instances)
         discovered_label_count = len(self.discovered_objects)
-        norm_count = discovered_instance_count if discovered_instance_count > 0 else discovered_label_count
-        current_score = min(norm_count / self.score_norm_target, 1.0)
+        current_score = (
+            min(discovered_gt_count / target_gt_count, 1.0)
+            if target_gt_count > 0
+            else 0.0
+        )
+        success = (
+            current_score >= self.success_recall_threshold
+            and coverage >= self.success_min_coverage
+        )
+        truncated = self.step_count >= self.max_actions
+        terminated = bool(success and not is_reset)
 
         if is_reset:
             reward = 0.0
@@ -772,8 +805,11 @@ class HabitatEnv:
             reward = (
                 self.discovery_bonus_scale * score_gain
                 + self.coverage_bonus_scale * coverage_delta
+                + (self.new_cell_reward if is_new_cell else 0.0)
                 - self.rho
             )
+            if success:
+                reward += self.success_reward
 
             # If the agent tried to go forward but barely moved, treat it as a collision/blocked step.
             if getattr(self, "last_action_name", None) == "move_forward" and moved_distance < 0.03:
@@ -798,7 +834,7 @@ class HabitatEnv:
             with open(self.trajectory_csv, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if write_header:
-                    writer.writerow(["step", "x", "y", "z", "yaw_deg", "score", "coverage", "num_instances"])
+                    writer.writerow(["step", "x", "y", "z", "yaw_deg", "score", "coverage", "num_discovered_gt", "num_instances"])
                 writer.writerow([
                     int(self.step_count),
                     round(ax, 4),
@@ -807,6 +843,7 @@ class HabitatEnv:
                     round(yaw_deg, 2),
                     round(float(current_score), 6),
                     round(float(coverage), 6),
+                    int(discovered_gt_count),
                     int(discovered_instance_count),
                 ])
 
@@ -820,8 +857,10 @@ class HabitatEnv:
             truncated,
             {
                 "score": float(current_score),
+                "object_recall": float(current_score),
                 "coverage_delta": float(coverage_delta),
-                "num_discovered": norm_count,
+                "num_discovered": discovered_gt_count,
+                "num_discovered_gt": discovered_gt_count,
                 "num_discovered_labels": discovered_label_count,
                 "num_discovered_instances": discovered_instance_count,
                 "coverage": float(coverage),
@@ -829,7 +868,8 @@ class HabitatEnv:
                 "total_navigable_cells": int(denom),
                 "agent_pos": (ax, az),
                 "scene_reward_gt_ids": sorted(int(item) for item in getattr(self, "scene_reward_gt_ids", set())),
-                "scene_reward_gt_count": int(len(getattr(self, "scene_reward_gt_ids", set()))),
+                "scene_reward_gt_count": int(target_gt_count),
+                "success": bool(success and not is_reset),
             },
         )
 
@@ -850,7 +890,9 @@ class HabitatEnv:
         if not detections:
             return []
         if self._last_depth is None or self._last_agent_state is None:
-            return self.validate_detections(detections)
+            annotated = self.validate_detections(detections)
+            self._accumulate_valid_detections(annotated)
+            return annotated
 
         depth = self._last_depth
         if isinstance(depth, np.ndarray) and depth.ndim == 3 and depth.shape[-1] == 1:
@@ -905,7 +947,147 @@ class HabitatEnv:
             det2["position"] = {"x": float(world_point[0]), "y": float(world_point[1]), "z": float(world_point[2])}
             annotated.append(det2)
 
-        return self.validate_detections(annotated)
+        annotated = self.validate_detections(annotated)
+        self._accumulate_valid_detections(annotated)
+        return annotated
+
+    def _accumulate_valid_detections(self, detections):
+        for det in detections or []:
+            if float(det.get("score", 0.0)) < self.det_score_thr:
+                continue
+            if det.get("is_gt_valid") is not True:
+                continue
+            if not self.reward_allow_semantic_iou_only and det.get("gt_match_mode") == "semantic_iou_only":
+                continue
+
+            label = det.get("canonical_label") or det.get("label", "unknown")
+            if label in self.reward_excluded_labels:
+                continue
+
+            try:
+                gt_semantic_id = int(det.get("gt_semantic_id"))
+            except Exception:
+                continue
+            if self.scene_reward_gt_ids and gt_semantic_id not in self.scene_reward_gt_ids:
+                continue
+
+            self.discovered_objects.add(label)
+            self.discovered_gt_ids.add(gt_semantic_id)
+            self.discovered_instances.add(self._build_instance_key(det, label))
+        self.prev_score = self._current_discovery_score()
+
+    def _current_discovery_score(self):
+        target_gt_count = len(getattr(self, "scene_reward_gt_ids", set()))
+        if target_gt_count <= 0:
+            return 0.0
+        return min(len(getattr(self, "discovered_gt_ids", set())) / target_gt_count, 1.0)
+
+    def observe_visible_reward_gt(self, min_pixels=80):
+        """Accumulate currently visible reward-eligible GT ids for oracle/IL data."""
+        semantic_obs = getattr(self, "_last_semantic", None)
+        visible = []
+        for gt_box in self._extract_all_visible_semantic_boxes(semantic_obs, min_pixels=min_pixels):
+            semantic_id = int(gt_box["semantic_id"])
+            if semantic_id not in self.scene_reward_gt_ids:
+                continue
+            if semantic_id in self.discovered_gt_ids:
+                continue
+            canonical = gt_box.get("canonical_label")
+            if canonical in self.reward_excluded_labels:
+                continue
+            visible.append(gt_box)
+            self.discovered_gt_ids.add(semantic_id)
+            if canonical:
+                self.discovered_objects.add(canonical)
+        self.prev_score = self._current_discovery_score()
+        return visible
+
+    def snapshot_agent_state(self):
+        """Return a lightweight snapshot that can restore pose and coverage state."""
+        agent_state = self.sim.get_agent(0).get_state()
+        return {
+            "position": np.array(agent_state.position, dtype=np.float32),
+            "rotation": agent_state.rotation,
+            "step_count": int(getattr(self, "step_count", 0)),
+            "visited_cells": set(getattr(self, "visited_cells", set())),
+            "discovered_objects": set(getattr(self, "discovered_objects", set())),
+            "discovered_instances": set(getattr(self, "discovered_instances", set())),
+            "discovered_gt_ids": set(getattr(self, "discovered_gt_ids", set())),
+            "prev_score": float(getattr(self, "prev_score", 0.0)),
+            "prev_coverage": float(getattr(self, "prev_coverage", 0.0)),
+            "prev_agent_position": (
+                None
+                if getattr(self, "prev_agent_position", None) is None
+                else tuple(self.prev_agent_position)
+            ),
+            "last_action_name": self.last_action_name,
+        }
+
+    def restore_agent_state(self, snapshot):
+        """Restore the pose/coverage portion of a snapshot_agent_state result."""
+        if not snapshot:
+            return
+        agent = self.sim.get_agent(0)
+        agent_state = agent.get_state()
+        agent_state.position = np.array(snapshot["position"], dtype=np.float32)
+        agent_state.rotation = snapshot["rotation"]
+        agent.set_state(agent_state)
+        self.step_count = int(snapshot.get("step_count", getattr(self, "step_count", 0)))
+        self.visited_cells = set(snapshot.get("visited_cells", set()))
+        self.discovered_objects = set(snapshot.get("discovered_objects", set()))
+        self.discovered_instances = set(snapshot.get("discovered_instances", set()))
+        self.discovered_gt_ids = set(snapshot.get("discovered_gt_ids", set()))
+        self.prev_score = float(snapshot.get("prev_score", 0.0))
+        self.prev_coverage = float(snapshot.get("prev_coverage", 0.0))
+        self.prev_agent_position = snapshot.get("prev_agent_position")
+        self.last_action_name = snapshot.get("last_action_name")
+        obs = self.sim.get_sensor_observations()
+        self._process_obs(obs, is_reset=True)
+        self.step_count = int(snapshot.get("step_count", getattr(self, "step_count", 0)))
+        self.visited_cells = set(snapshot.get("visited_cells", set()))
+        self.discovered_objects = set(snapshot.get("discovered_objects", set()))
+        self.discovered_instances = set(snapshot.get("discovered_instances", set()))
+        self.discovered_gt_ids = set(snapshot.get("discovered_gt_ids", set()))
+        self.prev_score = float(snapshot.get("prev_score", self.prev_score))
+        self.prev_coverage = float(snapshot.get("prev_coverage", self.prev_coverage))
+        self.prev_agent_position = snapshot.get("prev_agent_position")
+        self.last_action_name = snapshot.get("last_action_name")
+
+    def oracle_action_scores(self, candidate_actions=(0, 1, 2), min_visible_pixels=80):
+        """Score primitive actions by one-step GT discovery and coverage gain."""
+        base = self.snapshot_agent_state()
+        if not hasattr(self, "visited_cells"):
+            self.visited_cells = set()
+        base_seen = set(getattr(self, "discovered_gt_ids", set()))
+        base_cells = set(getattr(self, "visited_cells", set()))
+        scores = []
+        for action_id in candidate_actions:
+            self.restore_agent_state(base)
+            self.discovered_gt_ids = set(base_seen)
+            before_cells = set(base_cells)
+            obs = self.step(int(action_id))
+            visible = self.observe_visible_reward_gt(min_pixels=min_visible_pixels)
+            after_cells = set(getattr(self, "visited_cells", set()))
+            moved_to_new = len(after_cells - before_cells)
+            score_gain = len(set(getattr(self, "discovered_gt_ids", set())) - base_seen)
+            collision = (
+                int(action_id) == 2
+                and len(after_cells - before_cells) == 0
+                and obs.info.get("coverage_delta", 0.0) <= 0.0
+            )
+            scores.append(
+                {
+                    "action": int(action_id),
+                    "score_gain": int(score_gain),
+                    "visible_new_gt": int(len(visible)),
+                    "new_cells": int(moved_to_new),
+                    "coverage": float(obs.info.get("coverage", 0.0)),
+                    "collision": bool(collision),
+                }
+            )
+        self.restore_agent_state(base)
+        self.discovered_gt_ids = base_seen
+        return scores
 
     @staticmethod
     def _label_tokens(label):
@@ -996,6 +1178,40 @@ class HabitatEnv:
         boxes.sort(key=lambda item: item["pixel_count"], reverse=True)
         return boxes
 
+    def _is_oversized_detection_box(self, box):
+        if box is None or len(box) != 4:
+            return False
+
+        rgb = getattr(self, "_last_rgb", None)
+        if rgb is not None:
+            image_h, image_w = rgb.shape[:2]
+        else:
+            image_h, image_w = int(self.height), int(self.width)
+        image_w = max(int(image_w), 1)
+        image_h = max(int(image_h), 1)
+
+        x1, y1, x2, y2 = [float(v) for v in box]
+        x1 = min(max(x1, 0.0), float(image_w))
+        x2 = min(max(x2, 0.0), float(image_w))
+        y1 = min(max(y1, 0.0), float(image_h))
+        y2 = min(max(y2, 0.0), float(image_h))
+        box_w = max(x2 - x1, 0.0)
+        box_h = max(y2 - y1, 0.0)
+        if box_w <= 0.0 or box_h <= 0.0:
+            return True
+
+        area_ratio = (box_w * box_h) / max(float(image_w * image_h), 1.0)
+        max_area_ratio = float(getattr(self, "dino_max_box_area_ratio", 1.0) or 1.0)
+        if max_area_ratio < 1.0 and area_ratio > max_area_ratio:
+            return True
+
+        aspect_ratio = max(box_w / max(box_h, 1e-6), box_h / max(box_w, 1e-6))
+        max_aspect_ratio = float(getattr(self, "dino_max_box_aspect_ratio", 100.0) or 100.0)
+        if max_aspect_ratio < 100.0 and aspect_ratio > max_aspect_ratio:
+            return True
+
+        return False
+
     def validate_detections(self, detections):
         """Validate DINO detections against the current Habitat semantic frame."""
         if not detections:
@@ -1022,9 +1238,18 @@ class HabitatEnv:
                 validated.append(det2)
                 continue
 
+            if canonical_label in getattr(self, "reward_excluded_labels", set()):
+                det2["reject_reason"] = "reward_excluded_label"
+                validated.append(det2)
+                continue
+
             det_box = det2.get("bbox", det2.get("box"))
             if det_box is None or len(det_box) != 4:
                 det2["reject_reason"] = "missing_bbox"
+                validated.append(det2)
+                continue
+            if self._is_oversized_detection_box(det_box):
+                det2["reject_reason"] = "oversized_box"
                 validated.append(det2)
                 continue
 
@@ -1334,7 +1559,8 @@ class HabitatEnv:
         return (label,)
 
     def _build_semantic_id_label_map(self):
-        mapping = {}
+        self.semantic_label_source = None
+        mapping = self._load_hm3d_semantic_txt_label_map()
         try:
             semantic_scene = self.sim.semantic_annotations()
             for obj in getattr(semantic_scene, "objects", []):
@@ -1353,10 +1579,98 @@ class HabitatEnv:
                         label = str(category)
                 if not label:
                     label = f"semantic_{semantic_id}"
-                mapping[int(semantic_id)] = str(label)
+                mapping.setdefault(int(semantic_id), str(label))
+        except Exception:
+            return mapping
+        if mapping and self.semantic_label_source is None:
+            self.semantic_label_source = "semantic_annotations"
+        return mapping
+
+    def _load_hm3d_semantic_txt_label_map(self):
+        mapping = {}
+        semantic_txt = self._find_hm3d_semantic_txt_path()
+        if not semantic_txt:
+            return mapping
+
+        try:
+            with open(semantic_txt, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("HM3D"):
+                        continue
+                    try:
+                        row = next(csv.reader([line]))
+                    except Exception:
+                        continue
+                    if len(row) < 3:
+                        continue
+                    try:
+                        semantic_id = int(str(row[0]).strip())
+                    except Exception:
+                        continue
+                    label = str(row[2]).strip().strip('"')
+                    if label:
+                        mapping[semantic_id] = label
         except Exception:
             return {}
+
+        if mapping:
+            self.semantic_label_source = semantic_txt
         return mapping
+
+    def _find_hm3d_semantic_txt_path(self):
+        scene_ref = str(getattr(self, "scene_id", "") or "").strip()
+        if not scene_ref:
+            return None
+
+        candidate_dirs = []
+        if os.path.isdir(scene_ref):
+            candidate_dirs.append(scene_ref)
+        elif os.path.isfile(scene_ref):
+            candidate_dirs.append(os.path.dirname(scene_ref))
+
+        scene_name = os.path.basename(scene_ref.rstrip(os.sep))
+        scene_hash = scene_name
+        for suffix in (".basis.glb", ".semantic.glb", ".glb"):
+            if scene_hash.endswith(suffix):
+                scene_hash = scene_hash[: -len(suffix)]
+                break
+        if "-" in scene_hash:
+            scene_hash = scene_hash.split("-")[-1]
+
+        dataset_root = str(getattr(self, "dataset_root", "") or "").strip()
+        if dataset_root:
+            for split in ("train", "val", "minival", "test", ""):
+                root = os.path.join(dataset_root, split) if split else dataset_root
+                for pattern in (
+                    os.path.join(root, scene_name),
+                    os.path.join(root, f"*{scene_hash}*"),
+                ):
+                    for candidate in sorted(glob.glob(pattern)):
+                        if os.path.isdir(candidate):
+                            candidate_dirs.append(candidate)
+
+        seen_dirs = set()
+        for directory in candidate_dirs:
+            directory = os.path.abspath(directory)
+            if directory in seen_dirs or not os.path.isdir(directory):
+                continue
+            seen_dirs.add(directory)
+
+            explicit_names = [
+                f"{scene_hash}.semantic.txt",
+                f"{scene_name}.semantic.txt",
+            ]
+            for name in explicit_names:
+                path = os.path.join(directory, name)
+                if os.path.isfile(path):
+                    return path
+
+            matches = sorted(glob.glob(os.path.join(directory, "*.semantic.txt")))
+            if matches:
+                return matches[0]
+
+        return None
 
     def _build_scene_reward_gt_ids(self):
         reward_ids = set()
@@ -1368,6 +1682,17 @@ class HabitatEnv:
                 continue
             reward_ids.add(int(semantic_id))
         return reward_ids
+
+    def _warn_if_missing_reward_gt(self):
+        if self.scene_reward_gt_ids:
+            return
+        sample = sorted(self.semantic_id_to_label.items())[:8]
+        print(
+            "[GT WARNING] "
+            f"scene={self.scene_id} reward_gt=0 "
+            f"semantic_labels={len(self.semantic_id_to_label)} "
+            f"source={self.semantic_label_source or 'none'} sample={sample}"
+        )
 
     def _parse_semantic_object_id(self, semantic_id):
         if semantic_id is None:

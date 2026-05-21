@@ -152,7 +152,11 @@ def main(config):
 
     if args.use_dino:
         from components.detectors.grounding_dino_adapter import GroundingDINODetector
-        from components.perception.hm3d_labels import HM3D_DINO_PROMPT
+        from components.perception.hm3d_labels import (
+            HM3D_DINO_PROMPT,
+            HM3D_REWARD_DINO_PROMPT,
+            HM3D_REWARD_EXCLUDED_LABELS,
+        )
         print("[INFO] Initializing Grounding DINO Detector...")
         dino_device = os.environ.get("DINO_DEVICE", "").strip() or None
         if dino_device is not None:
@@ -164,12 +168,26 @@ def main(config):
         if not os.path.exists(dino_weights):
             print(f"[WARNING] DINO weights not found at {dino_weights}. Running without detector.")
         else:
-            dino_text_prompt = str(env_config.get("dino_text_prompt", HM3D_DINO_PROMPT))
+            default_dino_prompt = (
+                HM3D_DINO_PROMPT
+                if bool(env_config.get("dino_prompt_include_excluded", False))
+                else HM3D_REWARD_DINO_PROMPT
+            )
+            dino_text_prompt = str(env_config.get("dino_text_prompt", default_dino_prompt))
             dino_box_threshold = float(env_config.get("dino_box_threshold", 0.35))
             dino_text_threshold = float(env_config.get("dino_text_threshold", 0.30))
+            dino_filter_excluded = bool(env_config.get("dino_filter_reward_excluded", True))
+            dino_excluded_labels = (
+                env_config.get("reward_excluded_labels", list(HM3D_REWARD_EXCLUDED_LABELS))
+                if dino_filter_excluded
+                else []
+            )
+            dino_max_box_area_ratio = float(env_config.get("dino_max_box_area_ratio", 1.0))
+            dino_max_box_aspect_ratio = float(env_config.get("dino_max_box_aspect_ratio", 100.0))
             print(
                 f"[INFO] DINO HM3D prompt with {dino_text_prompt.count('.')} labels; "
-                f"box_threshold={dino_box_threshold:.2f}, text_threshold={dino_text_threshold:.2f}"
+                f"box_threshold={dino_box_threshold:.2f}, text_threshold={dino_text_threshold:.2f}, "
+                f"filter_reward_excluded={dino_filter_excluded}"
             )
             dino_detector = GroundingDINODetector(
                 config_path=dino_config,
@@ -177,7 +195,10 @@ def main(config):
                 device=dino_device,
                 text_prompt=dino_text_prompt,
                 box_threshold=dino_box_threshold,
-                text_threshold=dino_text_threshold
+                text_threshold=dino_text_threshold,
+                excluded_labels=dino_excluded_labels,
+                max_box_area_ratio=dino_max_box_area_ratio,
+                max_box_aspect_ratio=dino_max_box_aspect_ratio,
             )
 
     # When DINO is enabled, reserve GPU0 for detector by default.
@@ -220,10 +241,11 @@ def main(config):
             scene_id=habitat_scene_ids[0],
             scene_ids=habitat_scene_ids,
             render=env_config["render"],
+            width=env_config.get("width", 300),
+            height=env_config.get("height", 300),
             use_detector=(dino_detector is not None),
             detector=dino_detector,
             det_score_thr=env_config.get("det_score_thr", 0.20 if dino_detector is not None else 0.30),
-            score_norm_target=env_config.get("score_norm_target", 120.0),
             instance_merge_dist=env_config.get("instance_merge_dist", 0.8),
             coverage_cell_size=env_config.get("coverage_cell_size", 0.5),
             nav_sample_points=env_config.get("nav_sample_points", 4000),
@@ -234,7 +256,20 @@ def main(config):
             navmesh_cell_height=env_config.get("navmesh_cell_height", 0.05),
             navmesh_cell_size=env_config.get("navmesh_cell_size", 0.03),
             rho=env_config.get("rho", 0.1),
-            max_actions=agent_config["num_steps"],
+            coverage_bonus_scale=env_config.get("coverage_bonus_scale", 2.0),
+            discovery_bonus_scale=env_config.get("discovery_bonus_scale", 1.0),
+            new_cell_reward=env_config.get("new_cell_reward", 0.0),
+            collision_penalty=env_config.get("collision_penalty", 0.05),
+            dino_max_box_area_ratio=env_config.get("dino_max_box_area_ratio", 1.0),
+            dino_max_box_aspect_ratio=env_config.get("dino_max_box_aspect_ratio", 100.0),
+            gt_validation_iou_threshold=env_config.get("gt_validation_iou_threshold", 0.10),
+            gt_validation_mode=env_config.get("gt_validation_mode", "relaxed"),
+            success_recall_threshold=env_config.get("success_recall_threshold", 1.00),
+            success_min_coverage=env_config.get("success_min_coverage", 0.30),
+            success_reward=env_config.get("success_reward", 10.0),
+            reward_allow_semantic_iou_only=env_config.get("reward_allow_semantic_iou_only", False),
+            reward_excluded_labels=env_config.get("reward_excluded_labels", None),
+            max_actions=env_config.get("max_actions", agent_config["num_steps"]),
             save_debug_path=args.save_frames_to
         )
     elif not args.precomputed:

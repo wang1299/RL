@@ -5,6 +5,9 @@ Mirrors the setup from run_train.sh and main.py with multi-environment sampling.
 Usage:
     python train_habitat_parallel.py \
         --num_workers 4 \
+        --gpu_ids 7 \
+        --env_gpu_ids 4,5,6 \
+        --dino_devices cuda:4,cuda:5,cuda:6 \
         --episodes 100 \
         --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
         --habitat_scenes "00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,..." \
@@ -16,7 +19,9 @@ import argparse
 import sys
 import os
 import json
+import signal
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 
@@ -28,8 +33,37 @@ sys.path.insert(0, "/home/wgy/GroundingDINO")
 from components.agents.reinforce_agent import ReinforceAgent
 from components.environments.habitat_env import HabitatEnv
 from components.detectors.grounding_dino_service import GroundingDINOService, GroundingDINOServicePool
-from components.perception.hm3d_labels import HM3D_DINO_PROMPT
+from components.perception.hm3d_labels import (
+    HM3D_DINO_PROMPT,
+    HM3D_REWARD_DINO_PROMPT,
+    HM3D_REWARD_EXCLUDED_LABELS,
+)
 from RL_training.runner.parallel_habitat_rl_train_runner import ParallelHabitatRLTrainRunner
+
+
+_SHUTDOWN_REQUESTED = False
+
+
+def _handle_shutdown_signal(signum, frame):
+    global _SHUTDOWN_REQUESTED
+    if _SHUTDOWN_REQUESTED:
+        print(f"\n[INFO] Shutdown already in progress; ignoring signal {signum} while checkpoint is being saved...")
+        return
+    _SHUTDOWN_REQUESTED = True
+    print(f"\n[INFO] Received signal {signum}; saving checkpoint before shutdown...")
+    raise KeyboardInterrupt
+
+
+def _safe_run_tag(path: str) -> str:
+    name = Path(path).name
+    return name if name else datetime.now().strftime("parallel_train_%Y%m%d_%H%M%S")
+
+
+def _save_agent_checkpoint(agent, save_root: str, run_tag: str, status: str):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = Path(save_root) / run_tag
+    file_name = f"{timestamp}_{run_tag}_{status}.pth"
+    agent.save_model(str(save_dir), file_name=file_name)
 
 
 def _resolve_habitat_scene_path(hm3d_root: str, token: str) -> str:
@@ -212,13 +246,13 @@ def main():
     parser.add_argument("--num_steps", type=int, default=4000, help="Steps per rollout")
     
     # GPU
-    parser.add_argument("--gpu_ids", type=str, default="4,5,6,7",
-                        help="Comma-separated GPU IDs for policy (e.g., '4,5,6,7')")
-    parser.add_argument("--env_gpu_ids", type=str, default=None,
-                        help="Comma-separated GPU IDs for environment rendering (e.g., '4,5,6'). If provided, total workers = num_workers * len(env_gpu_ids)")
-    parser.add_argument("--dino_device", type=str, default="cuda:4",
+    parser.add_argument("--gpu_ids", type=str, default=os.environ.get("RL_GPU_IDS", "7"),
+                        help="Comma-separated GPU IDs for policy (e.g., '7', or logical '3' when CUDA_VISIBLE_DEVICES='4,5,6,7')")
+    parser.add_argument("--env_gpu_ids", type=str, default=os.environ.get("ENV_GPU_IDS", "4,5,6"),
+                        help="Comma-separated GPU IDs for environment rendering (e.g., '4,5,6', or logical '0,1,2' when CUDA_VISIBLE_DEVICES is set). If provided, total workers = num_workers * len(env_gpu_ids)")
+    parser.add_argument("--dino_device", type=str, default=os.environ.get("DINO_DEVICE", "cuda:4"),
                         help="GPU device for GroundingDINO detector")
-    parser.add_argument("--dino_devices", type=str, default=None,
+    parser.add_argument("--dino_devices", type=str, default=os.environ.get("DINO_DEVICES", "cuda:4,cuda:5,cuda:6"),
                         help="Comma-separated GPU devices for a multi-process GroundingDINO service pool")
     
     # Other
@@ -227,8 +261,17 @@ def main():
                         help="Directory to save visualization frames")
     parser.add_argument("--conf_path", type=str, default="config",
                         help="Path to configuration directory")
+    parser.add_argument("--save_model_to", type=str, default="/home/wgy/RL/RL_training/runs/model_weights",
+                        help="Directory where model checkpoints are saved on completion, interruption, or failure")
+    parser.add_argument("--no_save_on_exit", action="store_true",
+                        help="Disable automatic model checkpoint saving on exit")
+    parser.add_argument("--policy_checkpoint_load", type=str, default=None,
+                        help="Optional full policy checkpoint to initialize the RL agent, e.g. an HM3D imitation checkpoint")
     
     args = parser.parse_args()
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+    run_tag = _safe_run_tag(args.save_frames_to)
     
     # Load config
     print(f"[INFO] Loading config from {args.conf_path}")
@@ -249,6 +292,8 @@ def main():
                 agent_config[k] = int(agent_config[k])
             except Exception:
                 pass
+    agent_config["episodes"] = int(args.episodes)
+    agent_config["num_steps"] = int(args.num_steps)
 
     # This parallel Habitat entrypoint is intentionally fixed to REINFORCE + LSTM.
     # The wider project still has A2C/Transformer implementations, but this
@@ -295,12 +340,26 @@ def main():
                 dino_devices = [part.strip() for part in args.dino_devices.split(",") if part.strip()]
             if not dino_devices:
                 dino_devices = [args.dino_device]
-            dino_text_prompt = str(env_config.get("dino_text_prompt", HM3D_DINO_PROMPT))
+            default_dino_prompt = (
+                HM3D_DINO_PROMPT
+                if bool(env_config.get("dino_prompt_include_excluded", False))
+                else HM3D_REWARD_DINO_PROMPT
+            )
+            dino_text_prompt = str(env_config.get("dino_text_prompt", default_dino_prompt))
             dino_box_threshold = float(env_config.get("dino_box_threshold", 0.35))
             dino_text_threshold = float(env_config.get("dino_text_threshold", 0.30))
+            dino_filter_excluded = bool(env_config.get("dino_filter_reward_excluded", True))
+            dino_excluded_labels = (
+                env_config.get("reward_excluded_labels", list(HM3D_REWARD_EXCLUDED_LABELS))
+                if dino_filter_excluded
+                else []
+            )
+            dino_max_box_area_ratio = float(env_config.get("dino_max_box_area_ratio", 1.0))
+            dino_max_box_aspect_ratio = float(env_config.get("dino_max_box_aspect_ratio", 100.0))
             print(
                 f"[INFO] DINO HM3D prompt with {dino_text_prompt.count('.')} labels; "
-                f"box_threshold={dino_box_threshold:.2f}, text_threshold={dino_text_threshold:.2f}"
+                f"box_threshold={dino_box_threshold:.2f}, text_threshold={dino_text_threshold:.2f}, "
+                f"filter_reward_excluded={dino_filter_excluded}"
             )
 
             if len(dino_devices) == 1:
@@ -311,6 +370,9 @@ def main():
                     text_prompt=dino_text_prompt,
                     box_threshold=dino_box_threshold,
                     text_threshold=dino_text_threshold,
+                    excluded_labels=dino_excluded_labels,
+                    max_box_area_ratio=dino_max_box_area_ratio,
+                    max_box_aspect_ratio=dino_max_box_aspect_ratio,
                 )
                 print(f"[INFO] DINO service initialized on {dino_devices[0]}")
             else:
@@ -321,6 +383,9 @@ def main():
                     text_prompt=dino_text_prompt,
                     box_threshold=dino_box_threshold,
                     text_threshold=dino_text_threshold,
+                    excluded_labels=dino_excluded_labels,
+                    max_box_area_ratio=dino_max_box_area_ratio,
+                    max_box_aspect_ratio=dino_max_box_aspect_ratio,
                 )
                 print(f"[INFO] DINO service pool initialized on {dino_devices}")
     
@@ -367,7 +432,6 @@ def main():
     allowed_env_keys = {
         "width",
         "height",
-        "score_norm_target",
         "instance_merge_dist",
         "coverage_cell_size",
         "nav_sample_points",
@@ -380,12 +444,17 @@ def main():
         "fill_position_from_gt",
         "rho",
         "coverage_bonus_scale",
+        "new_cell_reward",
         "discovery_bonus_scale",
         "collision_penalty",
+        "dino_max_box_area_ratio",
+        "dino_max_box_aspect_ratio",
         "gt_validation_iou_threshold",
         "gt_validation_mode",
         "success_recall_threshold",
+        "success_min_coverage",
         "success_reward",
+        "reward_allow_semantic_iou_only",
         "reward_excluded_labels",
         "max_actions",
         "save_debug_interval",
@@ -427,6 +496,26 @@ def main():
         if encoder_path.exists():
             print(f"[INFO] Loading encoder weights from {encoder_path}")
             agent.load_weights(encoder_path=str(encoder_path), device=str(device))
+
+    if args.policy_checkpoint_load:
+        checkpoint_path = Path(args.policy_checkpoint_load).expanduser()
+        if checkpoint_path.exists():
+            print(f"[INFO] Loading full policy checkpoint from {checkpoint_path}")
+            try:
+                payload = torch.load(str(checkpoint_path), map_location=device, weights_only=False)
+            except TypeError:
+                payload = torch.load(str(checkpoint_path), map_location=device)
+            if isinstance(payload, dict):
+                state_dict = payload.get("model_state_dict") or payload.get("state_dict") or payload
+            else:
+                state_dict = payload.state_dict()
+            missing, unexpected = agent.load_state_dict(state_dict, strict=False)
+            if missing:
+                print(f"[WARNING] Missing keys while loading policy checkpoint: {missing}")
+            if unexpected:
+                print(f"[WARNING] Unexpected keys while loading policy checkpoint: {unexpected}")
+        else:
+            print(f"[WARNING] Policy checkpoint not found: {checkpoint_path}")
     
     # Multi-GPU setup for RGB encoder
     if torch.cuda.is_available() and len(parsed_gpu_ids) > 1:
@@ -437,44 +526,68 @@ def main():
             output_device=parsed_gpu_ids[0],
         )
     
-    # Create parallel training runner
-    print(f"[INFO] Creating parallel runner with {total_workers} workers...")
-    runner = ParallelHabitatRLTrainRunner(
-        agent=agent,
-        dataset_root=hm3d_root,
-        config_file=dataset_config,
-        num_workers=total_workers,
-        device=device,
-        save_dir=args.save_frames_to,
-        base_scene_ids=[Path(p).parent.name for p in habitat_scene_ids],
-        detection_service=dino_service,
-        env_config=env_config,
-        scene_count=len(habitat_scene_ids),
-        env_gpu_ids=env_gpu_ids if len(env_gpu_ids) > 0 else None,
-    )
-    
-    # Adjust episode count based on number of scenes
-    runner.total_episodes = args.episodes * len(habitat_scene_ids)
-    print(f"[INFO] Total episodes: {runner.total_episodes} ({args.episodes} per scene × {len(habitat_scene_ids)} scenes)")
-    
-    # Start training
-    print("[INFO] Starting parallel training...")
+    runner = None
+    exit_status = "COMPLETED"
+    checkpoint_saved = False
     try:
+        # Create parallel training runner
+        print(f"[INFO] Creating parallel runner with {total_workers} workers...")
+        runner = ParallelHabitatRLTrainRunner(
+            agent=agent,
+            dataset_root=hm3d_root,
+            config_file=dataset_config,
+            num_workers=total_workers,
+            device=device,
+            save_dir=args.save_frames_to,
+            base_scene_ids=[Path(p).parent.name for p in habitat_scene_ids],
+            detection_service=dino_service,
+            env_config=env_config,
+            scene_count=len(habitat_scene_ids),
+            env_gpu_ids=env_gpu_ids if len(env_gpu_ids) > 0 else None,
+        )
+
+        # Adjust episode count based on number of scenes
+        runner.total_episodes = args.episodes * len(habitat_scene_ids)
+        print(f"[INFO] Total episodes: {runner.total_episodes} ({args.episodes} per scene × {len(habitat_scene_ids)} scenes)")
+
+        # Start training
+        print("[INFO] Starting parallel training...")
         runner.run()
-        print("[INFO] Training completed successfully")
+        if getattr(runner, "was_interrupted", False) or _SHUTDOWN_REQUESTED:
+            exit_status = "INTERRUPTED"
+            print("[INFO] Training stopped before completion")
+        else:
+            print("[INFO] Training completed successfully")
     except KeyboardInterrupt:
+        exit_status = "INTERRUPTED"
         print("\n[INFO] Training interrupted by user")
     except Exception as e:
+        exit_status = "FAILED"
         print(f"\n[ERROR] Training failed: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
     finally:
-        runner.close()
+        if not args.no_save_on_exit:
+            try:
+                _save_agent_checkpoint(agent, args.save_model_to, run_tag, exit_status)
+                checkpoint_saved = True
+            except Exception as exc:
+                print(f"[ERROR] Failed to save model checkpoint: {exc}")
+        if runner is not None:
+            runner.close()
+        elif dino_service is not None:
+            try:
+                dino_service.close()
+            except Exception:
+                pass
         try:
             dummy_env.close()
         except:
             pass
+        if checkpoint_saved:
+            print(f"[INFO] Model checkpoint saved with status={exit_status}")
+    if exit_status == "FAILED":
+        sys.exit(1)
 
 
 if __name__ == "__main__":

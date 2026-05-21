@@ -66,10 +66,10 @@ kill $(cat /home/wgy/RL/train_png/parallel_train_<timestamp>/training.pid)
 
 ## Default Parallel Configuration
 
-`run_train_parallel.sh` currently masks physical GPUs `4,5,6,7`:
+`run_train_parallel.sh` currently masks physical GPUs `3,5,6,7`:
 
 ```bash
-export CUDA_VISIBLE_DEVICES="4,5,6,7"
+export CUDA_VISIBLE_DEVICES="3,5,6,7"
 export RL_GPU_IDS="3"
 export DINO_DEVICE="cuda:0"
 export DINO_DEVICES="cuda:0,cuda:1,cuda:2"
@@ -78,7 +78,7 @@ export ENV_GPU_IDS="0,1,2"
 
 Inside the process, logical CUDA devices map as:
 
-- `cuda:0` -> physical GPU 4
+- `cuda:0` -> physical GPU 3
 - `cuda:1` -> physical GPU 5
 - `cuda:2` -> physical GPU 6
 - `cuda:3` -> physical GPU 7
@@ -88,7 +88,7 @@ The default run uses:
 - 50 HM3D scenes
 - 100 episodes per scene
 - 4000 steps per episode
-- 4 workers per environment GPU
+- 4 workers per environment GPU by default (`WORKERS_PER_ENV_GPU=4`)
 - 12 total Habitat workers when `ENV_GPU_IDS="0,1,2"`
 - GroundingDINO services on logical GPUs `0,1,2`
 - RL policy/update on logical GPU `3`
@@ -128,9 +128,13 @@ The runner keeps independent per-environment state:
 - `per_env_buffers`: one rollout buffer per Habitat worker.
 - `per_env_hidden_states`: one LSTM hidden-state bundle per worker.
 - `per_env_last_actions`: one previous-action value per worker.
-- `per_env_discovered_objects` and `per_env_discovered_instances`: discovery accounting for DINO reward.
+- `per_env_discovered_gt_ids`: GT semantic object IDs already discovered in each worker episode.
+- `per_env_discovered_objects` and `per_env_discovered_instances`: label/box diagnostics for DINO reward debugging.
 
 When one worker finishes an episode, only that worker is reset; other workers keep sampling.
+Scene selection is driven by one global epoch cursor, not by per-worker scene
+counters. With 50 scenes and 12 workers, assignments go through scenes 1-50
+once before epoch 2 starts at scene 1 again.
 
 ## Detection And Visualization Outputs
 
@@ -146,7 +150,7 @@ Typical per-episode outputs include:
 - `dino_validation_XXXX.png`: GroundingDINO validation overlay.
 - `topdown_XXXX.png`: periodic top-down map snapshot.
 - `topdown_trajectory.png`: final top-down trajectory for the episode.
-- `trajectory.csv`: per-step agent position, score, coverage, and discovered-instance count.
+- `trajectory.csv`: per-step agent position, GT-object recall score, coverage, discovered GT count, and diagnostic detected-instance count.
 
 The fixed visualization interval is controlled by `save_debug_interval` in `HabitatEnv`; the default is every 100 environment steps.
 
@@ -169,6 +173,8 @@ The Habitat reward is based on:
 - collision penalty when forward movement is blocked.
 
 GroundingDINO detections are validated against Habitat semantic observations before they contribute to score/reward. Background-like labels such as wall, floor, ceiling, window, door, stairs, column, beam, and railing are excluded from reward by default.
+
+`score` is GT-object recall: discovered reward-eligible `gt_semantic_id` count divided by the current scene's reward-eligible GT object count. The older fixed `score_norm_target=120` saturation score is no longer used by the active Habitat training path. Episodes can end early only when object recall reaches `success_recall_threshold` (`1.00` by default) and coverage reaches `success_min_coverage`.
 
 ## TensorBoard
 
@@ -237,6 +243,11 @@ Whenever this README is read for project orientation or updated after code/confi
 
 | Time (UTC) | Change |
 | --- | --- |
+| 2026-05-09 06:56:17 UTC | Changed Habitat score/reward accounting from fixed 120-count saturation to GT semantic object recall plus coverage-gated success. |
+| 2026-05-08 10:40:56 UTC | Changed the parallel launch GPU mask to physical GPUs 3,5,6,7 while keeping 12 total Habitat workers. |
+| 2026-05-08 06:25:03 UTC | Fixed parallel worker startup cleanup/diagnostics, raised worker init timeout, and changed the default script to 4 Habitat workers per environment GPU. |
+| 2026-05-08 06:03:20 UTC | Preserved full-rollout REINFORCE returns while splitting large parallel updates into mini-batches. |
+| 2026-05-08 05:58:58 UTC | Loosened HM3D DINO validation thresholds, added low-frequency detection statistics, and changed parallel updates to mini-batch mode to avoid GPU OOM. |
 | 2026-05-08 05:46:09 UTC | Merged the two old parallel-training README files into this README, documented their outdated parts, and marked this file as the single source of truth. |
 | 2026-05-08 05:46:09 UTC | Added README maintenance rule: future README reads/updates should append a short change note with modification time. |
 | 2026-05-08 05:46:09 UTC | Added current `habitat` conda environment, parallel architecture, troubleshooting notes, visualization outputs, and modification checklist. |

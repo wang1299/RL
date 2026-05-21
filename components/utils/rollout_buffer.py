@@ -18,6 +18,7 @@ class RolloutBuffer:
         self.dones = []
         self.last_actions = []
         self.agent_positions = []
+        self.precomputed_returns = None
 
         # Hidden states at the beginning of the rollout
         self.initial_lssg_hidden = None
@@ -37,6 +38,7 @@ class RolloutBuffer:
         self.dones = []
         self.last_actions = []
         self.agent_positions = []
+        self.precomputed_returns = None
 
         # Hidden states at the beginning of the rollout
         self.initial_lssg_hidden = None
@@ -73,7 +75,7 @@ class RolloutBuffer:
         self.last_actions.append(last_action)
         self.agent_positions.append(agent_position)
 
-    def add_batch(self, states, actions, rewards, dones, hiddens, last_actions, agent_pos):
+    def add_batch(self, states, actions, rewards, dones, hiddens, last_actions, agent_pos, returns=None):
         """
         Adds a whole batch of transitions to the buffer at once.
         """
@@ -101,6 +103,8 @@ class RolloutBuffer:
         self.dones.extend(dones)
         self.last_actions.extend(last_actions)
         self.agent_positions.extend(agent_pos)
+        if returns is not None:
+            self.precomputed_returns = list(returns)
 
     def is_ready(self):
         return len(self.rewards) >= self.n_steps
@@ -116,7 +120,7 @@ class RolloutBuffer:
         return returns
 
     def get(self, gamma):
-        returns = self.compute_returns(gamma)
+        returns = self.precomputed_returns if self.precomputed_returns is not None else self.compute_returns(gamma)
 
         batch = {
             "rgb": self.state_rgb,

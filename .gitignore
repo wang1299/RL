@@ -249,3 +249,7 @@ __pycache__/
 data/
 train_png/
 *.jpg
+
+# Training outputs and TensorBoard event files.
+RL_training/runs/
+events.out.tfevents.*

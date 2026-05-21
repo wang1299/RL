@@ -151,8 +151,13 @@ class ParallelHabitatCollector:
         self.task_queues: List[mp.Queue] = []
         self.result_queue = self.mp_ctx.Queue()
         self.processes: List[mp.Process] = []
+        self._closed = False
         
-        self._start_workers()
+        try:
+            self._start_workers()
+        except Exception:
+            self.close()
+            raise
     
     def _start_workers(self):
         """Start all worker processes."""
@@ -163,8 +168,8 @@ class ParallelHabitatCollector:
             # Determine which GPU this worker should use if env_gpu_ids is provided
             local_env_kwargs = dict(self.env_kwargs)
             if self.env_gpu_ids and len(self.env_gpu_ids) > 0:
-                # We pass the logical gpu_id. In CUDA_VISIBLE_DEVICES="4,5,6,7",
-                # logical ID 0 is 4, 1 is 5, 2 is 6.
+                # We pass the logical gpu_id. In CUDA_VISIBLE_DEVICES="3,5,6,7",
+                # logical ID 0 is 3, 1 is 5, 2 is 6.
                 gpu_id = self.env_gpu_ids[worker_id % len(self.env_gpu_ids)]
                 local_env_kwargs["gpu_device_id"] = gpu_id
             
@@ -183,6 +188,8 @@ class ParallelHabitatCollector:
             )
             p.start()
             self.processes.append(p)
+            gpu_msg = f" gpu={local_env_kwargs.get('gpu_device_id')}" if "gpu_device_id" in local_env_kwargs else ""
+            print(f"[ParallelHabitatCollector] Spawned worker {worker_id} pid={p.pid}{gpu_msg}")
             # Brief stagger to avoid thrashing I/O / simulator initialization
             time.sleep(0.5)
         
@@ -193,8 +200,32 @@ class ParallelHabitatCollector:
         deadline = time.time() + self.timeout
         while len(initialized) < self.num_workers:
             remaining = deadline - time.time()
+            dead_workers = [
+                (idx, proc.pid, proc.exitcode)
+                for idx, proc in enumerate(self.processes)
+                if idx not in initialized and proc.exitcode is not None
+            ]
+            if dead_workers:
+                pending = [idx for idx in range(self.num_workers) if idx not in initialized]
+                raise RuntimeError(
+                    "Worker init failed before all workers were ready; "
+                    f"initialized={sorted(initialized)}, pending={pending}, dead={dead_workers}"
+                )
             if remaining <= 0:
-                raise TimeoutError(f"Worker init timeout after {self.timeout}s")
+                pending = [idx for idx in range(self.num_workers) if idx not in initialized]
+                statuses = [
+                    {
+                        "worker": idx,
+                        "pid": proc.pid,
+                        "alive": proc.is_alive(),
+                        "exitcode": proc.exitcode,
+                    }
+                    for idx, proc in enumerate(self.processes)
+                ]
+                raise TimeoutError(
+                    f"Worker init timeout after {self.timeout}s; "
+                    f"initialized={sorted(initialized)}, pending={pending}, statuses={statuses}"
+                )
             try:
                 worker_id, status, result = self.result_queue.get(timeout=min(5.0, remaining))
             except queue.Empty:
@@ -202,6 +233,7 @@ class ParallelHabitatCollector:
 
             if status == "init_ok":
                 initialized.add(worker_id)
+                print(f"[ParallelHabitatCollector] Worker {worker_id} initialized ({len(initialized)}/{self.num_workers})")
                 continue
 
             if status == "init_error":
@@ -384,6 +416,9 @@ class ParallelHabitatCollector:
 
     def close(self):
         """Terminate all worker processes."""
+        if self._closed:
+            return
+        self._closed = True
         # Send close signal to all workers
         for task_q in self.task_queues:
             task_q.put(("close",))

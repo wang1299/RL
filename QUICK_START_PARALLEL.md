@@ -21,24 +21,28 @@ nohup /home/wgy/RL/run_train_parallel.sh > /home/wgy/RL/train_log/nohup.log 2>&1
 ```
 
 这将：
-- 使用 4 个并行 worker
-- 在 GPU 5,6,7 上运行策略推理
-- 在 GPU 4 上运行 GroundingDINO 检测
-- 训练所有 50 个 HM3D 场景，每个场景 100 个 episode
+- 使用 12 个并行 Habitat workers（3 张环境 GPU × 每张 4 个）
+- 在物理 GPU 7 上运行策略推理和更新
+- 在物理 GPU 3,5,6 上运行 Habitat 环境和 GroundingDINO 检测池
+- 按全局 epoch 调度 50 个 HM3D 场景：前 50 次 scene 分配覆盖 1-50 各一次，然后才进入下一轮
+- 每个场景训练 100 个 episode
 - 保存可视化和日志到 `/home/wgy/RL/train_log` 和 `/home/wgy/RL/train_png`
 
 ### 方式 2: 直接运行 Python 脚本
 
 ```bash
 cd /home/wgy/RL
+export CUDA_VISIBLE_DEVICES="3,5,6,7"
 
 python train_habitat_parallel.py \
     --conf_path /home/wgy/RL/config \
     --num_workers 4 \
     --episodes 100 \
     --num_steps 4000 \
-    --gpu_ids "5,6,7" \
-    --dino_device "cuda:4" \
+    --gpu_ids "3" \
+    --env_gpu_ids "0,1,2" \
+    --dino_device "cuda:0" \
+    --dino_devices "cuda:0,cuda:1,cuda:2" \
     --use_dino \
     --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
     --habitat_scenes "00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,..." \
@@ -65,8 +69,9 @@ python train_habitat_parallel.py \
 
 ```bash
 # run_train.sh
-export RL_GPU_IDS="5,6,7"
-export DINO_DEVICE="cuda:4"
+export CUDA_VISIBLE_DEVICES="3,5,6,7"
+export RL_GPU_IDS="3"
+export DINO_DEVICE="cuda:0"
 nohup python RL_training/main.py \
     --use_habitat \
     --habitat_scenes "$HABITAT_SCENES" \
@@ -74,11 +79,16 @@ nohup python RL_training/main.py \
     ...
 
 # 对应的 run_train_parallel.sh
-export RL_GPU_IDS="5,6,7"
-export DINO_DEVICE="cuda:4"
+export CUDA_VISIBLE_DEVICES="3,5,6,7"
+export RL_GPU_IDS="3"
+export DINO_DEVICE="cuda:0"
+export DINO_DEVICES="cuda:0,cuda:1,cuda:2"
+export ENV_GPU_IDS="0,1,2"
 nohup python train_habitat_parallel.py \
-    --gpu_ids "5,6,7" \
-    --dino_device "cuda:4" \
+    --gpu_ids "3" \
+    --env_gpu_ids "0,1,2" \
+    --dino_device "cuda:0" \
+    --dino_devices "cuda:0,cuda:1,cuda:2" \
     --use_dino \
     --habitat_scenes "$HABITAT_SCENES" \
     ...
@@ -88,11 +98,13 @@ nohup python train_habitat_parallel.py \
 
 | 参数 | 默认值 | 说明 |
 |-----|--------|------|
-| `--num_workers` | 4 | 并行环境数 |
+| `--num_workers` | 4 | 每张环境 GPU 的 worker 数；配合 `ENV_GPU_IDS="0,1,2"` 时总共 12 个 |
 | `--episodes` | 100 | 每个场景的训练 episode 数 |
 | `--num_steps` | 4000 | 每个 rollout 收集的步数 |
-| `--gpu_ids` | "4,5,6,7" | 策略网络使用的 GPU ID (逗号分隔) |
-| `--dino_device` | "cuda:4" | DINO 检测器使用的 GPU |
+| `--gpu_ids` | "7" | 直接运行时策略网络使用物理 GPU 7；`run_train_parallel.sh` 中传入逻辑 `"3"` |
+| `--env_gpu_ids` | "3,5,6" | 直接运行时 Habitat workers 使用物理 GPU 3,5,6；`run_train_parallel.sh` 中传入逻辑 `"0,1,2"` |
+| `--dino_device` | "cuda:3" | 直接运行时 DINO 默认物理 GPU 3；`run_train_parallel.sh` 中传入逻辑 `"cuda:0"` |
+| `--dino_devices` | "cuda:3,cuda:5,cuda:6" | 直接运行时 DINO 检测池使用物理 GPU 3,5,6；`run_train_parallel.sh` 中传入逻辑 `"cuda:0,cuda:1,cuda:2"` |
 | `--use_dino` | (flag) | 启用 GroundingDINO 检测 |
 | `--dataset_root` | `/home/wgy/hm3d/...` | HM3D 数据集根路径 |
 | `--habitat_scenes` | None | 场景 ID 列表 (逗号分隔) |
@@ -123,8 +135,8 @@ tensorboard --logdir /home/wgy/RL/RL_training/runs
 watch -n 1 nvidia-smi
 
 # 预期看到：
-# GPU 4: GroundingDINO ~50-80% 显存 / 60-90% 使用率
-# GPU 5,6,7: 策略推理 ~30-60% 显存 / 40-70% 使用率
+# GPU 3,5,6: Habitat workers + GroundingDINO 检测池
+# GPU 7: 策略推理和更新
 ```
 
 ## 停止训练
@@ -142,11 +154,11 @@ kill -9 <PID>
 
 ## 性能预期
 
-- **并行加速**: 4 workers 预期 **2.5-3.2x** 加速
+- **并行加速**: 12 workers 预期显著快于串行采样
 - **GPU 利用率**: 从单环境的 5-10% 提升到 40-80%
 - **总训练时间**: 
   - 串行 (main.py): ~300-400 小时 (50 scenes × 100 ep)
-  - 并行 (4 workers): ~100-150 小时
+  - 并行 (12 workers): 取决于 Habitat/DINO 吞吐和显存余量
 
 ## 常见问题
 
@@ -157,7 +169,7 @@ kill -9 <PID>
 
 ### Q2: GPU 利用率仍然很低 (< 30%)
 **A**: 
-- 增加 `num_workers` (现在是 4)
+- 增加 `WORKERS_PER_ENV_GPU` (现在是 4，总 worker 数是 12)
 - 检查 batch size 是否合适
 - 模型参数可能太小，增加 `rgb_dim`/`sg_dim`
 
@@ -203,17 +215,17 @@ python train_habitat_parallel.py \
 ### 多 GPU 策略
 
 ```
-GPU 4: GroundingDINO (DINO)
+Physical GPUs 3,5,6: Habitat workers + GroundingDINO pool
   ├─ 接收 RGB 帧 (batch B)
   ├─ 返回检测结果
-  └─ 显存: ~12GB (SwinT + OGC)
+  └─ 每张环境 GPU 默认 4 个 worker
 
-GPUs 5,6,7: 策略网络 (DataParallel)
-  ├─ RGB Encoder: DataParallel(gpu_ids=[5,6,7])
+Physical GPU 7: 策略网络和更新
+  ├─ RGB Encoder / policy forward
   ├─ 图编码器 (LSSG/GSSG): single GPU
   └─ 策略头: single GPU
   
-主 GPU (GPU 5):
+主 GPU (physical GPU 7 / logical cuda:3):
   ├─ forward_seq() 输出 [B, T, D]
   ├─ policy forward [B, T, num_actions]
   └─ 梯度更新
@@ -222,7 +234,7 @@ GPUs 5,6,7: 策略网络 (DataParallel)
 ### 环境隔离
 
 ```
-Main Process (GPU 5,6,7)          Worker Process (CPU Core 0)
+Main Process (physical GPU 7)     Worker Process (physical GPU 3/5/6)
     ├─ ParallelHabitatCollector   ├─ HabitatEnv instance
     ├─ task_queue ────────────>   ├─ listen for tasks
     │  (reset, step)              │
@@ -236,7 +248,7 @@ Main Process (GPU 5,6,7)          Worker Process (CPU Core 0)
 
 1. **FSDP**: 多机多卡分布式训练
 2. **Replay Buffer**: off-policy 学习 (PPO/TRPO)
-3. **Scene Rotation**: 动态轮换场景给 workers
+3. **Strict Epoch Barrier**: 如果需要，可以在 epoch 边界等待慢 worker 完成后再进入下一轮
 4. **AMP**: 自动混合精度降低显存
 
 ---
