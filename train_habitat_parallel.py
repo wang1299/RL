@@ -267,6 +267,8 @@ def main():
                         help="Disable automatic model checkpoint saving on exit")
     parser.add_argument("--policy_checkpoint_load", type=str, default=None,
                         help="Optional full policy checkpoint to initialize the RL agent, e.g. an HM3D imitation checkpoint")
+    parser.add_argument("--use_transformer", action="store_true",
+                        help="Use the Transformer navigation policy instead of the default LSTM policy")
     
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
@@ -295,11 +297,10 @@ def main():
     agent_config["episodes"] = int(args.episodes)
     agent_config["num_steps"] = int(args.num_steps)
 
-    # This parallel Habitat entrypoint is intentionally fixed to REINFORCE + LSTM.
-    # The wider project still has A2C/Transformer implementations, but this
-    # training script should not silently drift into another 2x2 variant.
+    # This parallel Habitat entrypoint is fixed to REINFORCE, while the
+    # recurrent core can be selected explicitly for IL-initialized runs.
     agent_config["name"] = "reinforce"
-    navigation_config["use_transformer"] = False
+    navigation_config["use_transformer"] = bool(args.use_transformer)
     
     # Set up device
     parsed_gpu_ids = [int(x.strip()) for x in args.gpu_ids.split(",") if x.strip()]
@@ -480,8 +481,8 @@ def main():
         **extra_env_kwargs,
     )
     
-    # Create REINFORCE + LSTM agent
-    print("[INFO] Creating REINFORCE + LSTM agent...")
+    core_name = "Transformer" if navigation_config["use_transformer"] else "LSTM"
+    print(f"[INFO] Creating REINFORCE + {core_name} agent...")
     agent = ReinforceAgent(
         env=dummy_env,
         navigation_config=navigation_config,

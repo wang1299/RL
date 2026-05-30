@@ -17,7 +17,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import habitat_sim
@@ -45,12 +45,24 @@ class Viewpoint:
     visible_ids: frozenset
 
 
+@dataclass(frozen=True)
+class PoiStart:
+    index: int
+    poi_id: int
+    position: np.ndarray
+
+
 def _angle_wrap_deg(angle: float) -> float:
     return (float(angle) + 180.0) % 360.0 - 180.0
 
 
 def _xz_dist(a: Sequence[float], b: Sequence[float]) -> float:
     return float(np.hypot(float(a[0]) - float(b[0]), float(a[2]) - float(b[2])))
+
+
+def _add_timing(timing: Optional[Dict[str, float]], key: str, start_time: float) -> None:
+    if timing is not None:
+        timing[key] = float(timing.get(key, 0.0)) + (time.perf_counter() - start_time)
 
 
 def _desired_yaw_to_point(source: Sequence[float], target: Sequence[float]) -> float:
@@ -67,6 +79,60 @@ def _set_agent_pose(env: HabitatEnv, position: Sequence[float], yaw_deg: float):
     state.rotation = quat_from_angle_axis(math.radians(float(yaw_deg)), np.array([0.0, 1.0, 0.0]))
     agent.set_state(state)
     return env.sim.get_sensor_observations()
+
+
+def _load_scene_pois(scene_id: str, poi_dir: Path) -> List[PoiStart]:
+    scene_hash = scene_id.split("-")[0].split("/")[-1] if "/" in scene_id else scene_id.split("-")[0]
+    poi_file = poi_dir / f"{scene_hash}_poi.json"
+    if not poi_file.exists():
+        return []
+    try:
+        payload = json.loads(poi_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[WARNING] Failed to read POI file {poi_file}: {exc}")
+        return []
+
+    starts: List[PoiStart] = []
+    for idx, item in enumerate(payload.get("poi", [])):
+        try:
+            position = np.asarray(item["position"], dtype=np.float32)
+        except Exception:
+            continue
+        if position.shape[0] < 3:
+            continue
+        try:
+            poi_id = int(item.get("id", idx))
+        except Exception:
+            poi_id = int(idx)
+        starts.append(PoiStart(index=idx, poi_id=poi_id, position=position[:3]))
+    return starts
+
+
+def _fallback_scene_starts(env: HabitatEnv, count: int) -> List[PoiStart]:
+    starts: List[PoiStart] = []
+    largest_island_idx = env._get_largest_island_index()
+    for idx in range(max(int(count), 1)):
+        if largest_island_idx is None:
+            point = env.sim.pathfinder.get_random_navigable_point(max_tries=20)
+        else:
+            point = env.sim.pathfinder.get_random_navigable_point(
+                max_tries=20,
+                island_index=largest_island_idx,
+            )
+        if point is None:
+            continue
+        starts.append(PoiStart(index=idx, poi_id=idx, position=np.asarray(point, dtype=np.float32)))
+    return starts
+
+
+def _reset_to_start(env: HabitatEnv, scene_number: int, start: PoiStart, yaw_deg: float, episode_tag: str, save_debug: bool):
+    return env.reset(
+        scene_number=scene_number,
+        random_start=False,
+        start_position=start.position,
+        start_rotation=math.radians(float(yaw_deg)),
+        episode_tag=episode_tag if save_debug else None,
+    )
 
 
 def _visible_reward_ids_from_pose(env: HabitatEnv, position, yaw_deg: float, min_pixels: int) -> Set[int]:
@@ -205,8 +271,15 @@ def _record(records: List[Dict], obs, env: HabitatEnv, last_action: int, action:
     )
 
 
-def _best_progress_action(env: HabitatEnv, waypoint: Sequence[float], rng: random.Random) -> int:
+def _best_progress_action(
+    env: HabitatEnv,
+    waypoint: Sequence[float],
+    rng: random.Random,
+    timing: Optional[Dict[str, float]] = None,
+) -> int:
+    t0 = time.perf_counter()
     snapshot = env.snapshot_agent_state()
+    _add_timing(timing, "oracle_snapshot", t0)
     state = env.sim.get_agent(0).get_state()
     start_pos = np.asarray(state.position, dtype=np.float32)
     target_pos = np.asarray(waypoint, dtype=np.float32)
@@ -217,10 +290,16 @@ def _best_progress_action(env: HabitatEnv, waypoint: Sequence[float], rng: rando
 
     candidates = []
     for action in (0, 1, 2):
+        t0 = time.perf_counter()
         env.restore_agent_state(snapshot)
+        _add_timing(timing, "oracle_restore", t0)
         before_ids = set(env.discovered_gt_ids)
+        t0 = time.perf_counter()
         obs = env.step(action)
+        _add_timing(timing, "oracle_step", t0)
+        t0 = time.perf_counter()
         env.observe_visible_reward_gt()
+        _add_timing(timing, "oracle_observe", t0)
         new_ids = len(set(env.discovered_gt_ids) - before_ids)
         next_state = env.sim.get_agent(0).get_state()
         next_pos = np.asarray(next_state.position, dtype=np.float32)
@@ -238,7 +317,9 @@ def _best_progress_action(env: HabitatEnv, waypoint: Sequence[float], rng: rando
         )
         candidates.append((score, int(action), obs))
 
+    t0 = time.perf_counter()
     env.restore_agent_state(snapshot)
+    _add_timing(timing, "oracle_restore", t0)
     best_score = max(item[0] for item in candidates)
     best_actions = [item[1] for item in candidates if abs(item[0] - best_score) < 1e-9]
     return int(rng.choice(best_actions))
@@ -248,6 +329,24 @@ def _face_target_yaw(env: HabitatEnv, target_yaw: float) -> int:
     yaw = float(env._yaw_from_quat(env.sim.get_agent(0).get_state().rotation))
     diff = _angle_wrap_deg(float(target_yaw) - yaw)
     return 0 if diff > 0.0 else 1
+
+
+def _geometric_progress_action(
+    env: HabitatEnv,
+    waypoint: Sequence[float],
+    turn_threshold_deg: float,
+    timing: Optional[Dict[str, float]] = None,
+) -> int:
+    t0 = time.perf_counter()
+    state = env.sim.get_agent(0).get_state()
+    current = np.asarray(state.position, dtype=np.float32)
+    desired_yaw = _desired_yaw_to_point(current, waypoint)
+    yaw = float(env._yaw_from_quat(state.rotation))
+    diff = _angle_wrap_deg(desired_yaw - yaw)
+    _add_timing(timing, "geometric_action", t0)
+    if abs(diff) > float(turn_threshold_deg):
+        return 0 if diff > 0.0 else 1
+    return 2
 
 
 def _run_episode_to_viewpoints(
@@ -260,35 +359,66 @@ def _run_episode_to_viewpoints(
     max_target_steps: int,
     min_pixels: int,
     waypoint_reach_dist: float,
-) -> Tuple[List[Dict], float, float]:
+    action_policy: str,
+    turn_threshold_deg: float,
+) -> Tuple[List[Dict], float, float, Dict[str, float]]:
+    run_start = time.perf_counter()
+    timing: Dict[str, float] = {}
     records: List[Dict] = []
     last_action = -1
     target_index = 0
     target_steps = 0
 
+    t0 = time.perf_counter()
     env.observe_visible_reward_gt(min_pixels=min_pixels)
+    _add_timing(timing, "initial_observe", t0)
     while target_index < len(ordered) and len(records) < int(max_steps):
+        loop_start = time.perf_counter()
         target = ordered[target_index]
         state = env.sim.get_agent(0).get_state()
         dist = _xz_dist(state.position, target.position)
         yaw = float(env._yaw_from_quat(state.rotation))
         target_yaw_error = abs(_angle_wrap_deg(float(target.yaw_deg) - yaw))
+        _add_timing(timing, "loop_state", loop_start)
 
         if dist <= float(reach_dist):
             if target_yaw_error <= 15.0:
                 target_index += 1
                 target_steps = 0
                 continue
+            t0 = time.perf_counter()
             action = _face_target_yaw(env, target.yaw_deg)
+            _add_timing(timing, "face_action", t0)
         else:
+            t0 = time.perf_counter()
             waypoint = _next_path_waypoint(env, target.position, waypoint_reach_dist=waypoint_reach_dist)
-            action = _best_progress_action(env, waypoint, rng)
+            _add_timing(timing, "path_plan", t0)
+            if action_policy == "oracle":
+                t0 = time.perf_counter()
+                action = _best_progress_action(env, waypoint, rng, timing=timing)
+                _add_timing(timing, "best_action_total", t0)
+            elif action_policy == "geometric":
+                action = _geometric_progress_action(
+                    env,
+                    waypoint,
+                    turn_threshold_deg=turn_threshold_deg,
+                    timing=timing,
+                )
+            else:
+                raise ValueError(f"Unsupported action_policy={action_policy!r}")
 
+        t0 = time.perf_counter()
         _record(records, obs, env, last_action, action)
+        _add_timing(timing, "record", t0)
+        t0 = time.perf_counter()
         obs = env.step(action)
+        _add_timing(timing, "real_step", t0)
+        t0 = time.perf_counter()
         env.observe_visible_reward_gt(min_pixels=min_pixels)
+        _add_timing(timing, "real_observe", t0)
         last_action = action
         target_steps += 1
+        timing["steps"] = float(timing.get("steps", 0.0)) + 1.0
 
         if obs.terminated:
             break
@@ -296,13 +426,54 @@ def _run_episode_to_viewpoints(
             target_index += 1
             target_steps = 0
 
+    t0 = time.perf_counter()
     final_score = float(env._current_discovery_score())
     final_coverage = float(obs.info.get("coverage", 0.0))
-    return records, final_score, final_coverage
+    _add_timing(timing, "final_metrics", t0)
+    timing["run_total"] = time.perf_counter() - run_start
+    return records, final_score, final_coverage, timing
+
+
+def _format_timing(timing: Dict[str, float]) -> str:
+    steps = max(float(timing.get("steps", 0.0)), 1.0)
+    keys = [
+        "run_total",
+        "path_plan",
+        "best_action_total",
+        "oracle_step",
+        "oracle_observe",
+        "real_step",
+        "real_observe",
+        "record",
+        "initial_observe",
+        "final_metrics",
+    ]
+    parts = [f"steps={int(timing.get('steps', 0.0))}"]
+    for key in keys:
+        if key in timing:
+            parts.append(f"{key}={timing[key]:.2f}s")
+    if "run_total" in timing:
+        parts.append(f"per_step={timing['run_total'] / steps:.3f}s")
+    return " ".join(parts)
+
+
+def _assigned_task_count(offset: int, count: int, num_shards: int, shard_index: int) -> int:
+    return sum(
+        1
+        for local_idx in range(int(count))
+        if (int(offset) + local_idx) % int(num_shards) == int(shard_index)
+    )
 
 
 def generate(args) -> None:
     rng = random.Random(args.seed)
+    num_shards = int(args.num_shards)
+    shard_index = int(args.shard_index)
+    if num_shards < 1:
+        raise ValueError("--num_shards must be >= 1")
+    if shard_index < 0 or shard_index >= num_shards:
+        raise ValueError("--shard_index must satisfy 0 <= shard_index < num_shards")
+
     env_config = _load_config_mapping(args.conf_path, "env_config.yaml", "env.json")
     scene_list = args.habitat_scenes or DEFAULT_HM3D_TRAIN_SCENES_CSV
     habitat_scene_ids, missing = _resolve_habitat_scene_list(
@@ -344,111 +515,272 @@ def generate(args) -> None:
         **env_kwargs,
     )
 
+    start_yaw_degrees = [float(item) for item in str(args.start_yaw_degrees).split(",") if item.strip()]
+    if not start_yaw_degrees:
+        raise ValueError("--start_yaw_degrees must contain at least one angle")
+    viewpoint_yaw_degrees = [float(item) for item in str(args.viewpoint_yaw_degrees).split(",") if item.strip()]
+    if not viewpoint_yaw_degrees:
+        raise ValueError("--viewpoint_yaw_degrees must contain at least one angle")
+    poi_dir = Path(args.poi_dir).expanduser().resolve()
+
+    scene_plan_counts = []
+    for scene_id in habitat_scene_ids:
+        pois = _load_scene_pois(Path(scene_id).parent.name, poi_dir)
+        if pois:
+            scene_plan_counts.append(len(pois) * len(start_yaw_degrees))
+        else:
+            scene_plan_counts.append(int(args.episodes_per_scene) * len(start_yaw_degrees))
+    scene_task_offsets = []
+    running_total = 0
+    for count in scene_plan_counts:
+        scene_task_offsets.append(running_total)
+        running_total += int(count)
+    shard_scene_plan_counts = [
+        _assigned_task_count(offset, count, num_shards, shard_index)
+        for offset, count in zip(scene_task_offsets, scene_plan_counts)
+    ]
+
     metadata = {
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "dataset_root": args.dataset_root,
         "scene_count": len(habitat_scene_ids),
         "scenes": [Path(scene).parent.name for scene in habitat_scene_ids],
         "episodes_per_scene": int(args.episodes_per_scene),
+        "start_policy": "all_pois_fixed_yaw",
+        "poi_dir": str(poi_dir),
+        "start_yaw_degrees": start_yaw_degrees,
+        "viewpoint_yaw_degrees": viewpoint_yaw_degrees,
+        "planned_episodes_per_scene": scene_plan_counts,
+        "planned_total_episodes_full": int(sum(scene_plan_counts)),
+        "planned_episodes_per_scene_shard": shard_scene_plan_counts,
+        "planned_total_episodes": int(sum(shard_scene_plan_counts)),
+        "num_shards": num_shards,
+        "shard_index": shard_index,
         "max_steps": int(args.max_steps),
         "candidate_viewpoints": int(args.candidate_viewpoints),
         "max_cover_viewpoints": int(args.max_cover_viewpoints),
         "min_save_score": float(args.min_save_score),
         "min_save_coverage": float(args.min_save_coverage),
+        "action_policy": str(args.action_policy),
+        "turn_threshold_deg": float(args.turn_threshold_deg),
         "expert": "hm3d_viewpoint_cover_navmesh_oracle_v1",
     }
-    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    metadata_path = output_dir / "metadata.json"
+    if num_shards > 1:
+        metadata_path = output_dir / f"metadata_shard_{shard_index:02d}_of_{num_shards:02d}.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    if num_shards == 1 or shard_index == 0:
+        (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     saved = 0
     rejected = 0
     no_cover = 0
-    yaw_degrees = [float(item) for item in str(args.yaw_degrees).split(",") if item.strip()]
+    skipped_existing = 0
     try:
-        total = len(habitat_scene_ids) * int(args.episodes_per_scene)
+        total = int(sum(shard_scene_plan_counts))
         progress = tqdm(total=total, desc="Generating HM3D viewpoint expert demos")
         for scene_idx in range(len(habitat_scene_ids)):
+            assigned_scene_count = int(shard_scene_plan_counts[scene_idx])
+            if assigned_scene_count <= 0:
+                if args.profile_timing:
+                    scene_name = Path(habitat_scene_ids[scene_idx]).parent.name
+                    print(
+                        "[TIMING][scene_skip_shard] "
+                        f"scene={scene_idx + 1}/{len(habitat_scene_ids)} name={scene_name} "
+                        f"shard={shard_index}/{num_shards}",
+                        flush=True,
+                    )
+                continue
+            scene_total_start = time.perf_counter()
             scene_name = Path(habitat_scene_ids[scene_idx]).parent.name
-            for start_idx in range(int(args.episodes_per_scene)):
-                episode_tag = f"vp_scene_{scene_idx + 1:02d}_start_{start_idx:03d}"
-                obs = env.reset(
-                    scene_number=scene_idx + 1,
-                    random_start=True,
-                    episode_tag=episode_tag if args.save_debug else None,
+            t0 = time.perf_counter()
+            env.reset(scene_number=scene_idx + 1, random_start=False)
+            scene_reset_seconds = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            starts = _load_scene_pois(scene_name, poi_dir)
+            poi_load_seconds = time.perf_counter() - t0
+            if not starts:
+                print(
+                    f"[WARNING] No POIs for scene {scene_name}; falling back to "
+                    f"{args.episodes_per_scene} largest-island starts"
                 )
-                start_position = np.asarray(env.sim.get_agent(0).get_state().position, dtype=np.float32)
+                t0 = time.perf_counter()
+                starts = _fallback_scene_starts(env, int(args.episodes_per_scene))
+                poi_load_seconds += time.perf_counter() - t0
 
-                candidates = _sample_candidate_viewpoints(
-                    env,
-                    rng,
-                    sample_count=int(args.candidate_viewpoints),
-                    yaw_degrees=yaw_degrees,
-                    min_pixels=int(args.min_visible_pixels),
+            t0 = time.perf_counter()
+            candidates = _sample_candidate_viewpoints(
+                env,
+                rng,
+                sample_count=int(args.candidate_viewpoints),
+                yaw_degrees=viewpoint_yaw_degrees,
+                min_pixels=int(args.min_visible_pixels),
+            )
+            candidate_seconds = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            cover = _choose_viewpoint_cover(
+                candidates,
+                target_ids=env.scene_reward_gt_ids,
+                max_viewpoints=int(args.max_cover_viewpoints),
+            )
+            cover_seconds = time.perf_counter() - t0
+            if args.profile_timing:
+                print(
+                    "[TIMING][scene] "
+                    f"scene={scene_idx + 1}/{len(habitat_scene_ids)} name={scene_name} "
+                    f"reset={scene_reset_seconds:.2f}s poi_load={poi_load_seconds:.2f}s "
+                    f"candidate_sample={candidate_seconds:.2f}s cover={cover_seconds:.2f}s "
+                    f"candidates={len(candidates)} cover_vp={len(cover)} starts={len(starts)}",
+                    flush=True,
                 )
-                cover = _choose_viewpoint_cover(
-                    candidates,
-                    target_ids=env.scene_reward_gt_ids,
-                    max_viewpoints=int(args.max_cover_viewpoints),
-                )
-                ordered = _order_viewpoints(start_position, cover)
-                if not ordered:
-                    no_cover += 1
-                    rejected += 1
-                    progress.set_postfix(saved=saved, rejected=rejected, no_cover=no_cover, score="0.00", cov="0.00")
-                    progress.update(1)
-                    continue
 
-                records, final_score, final_coverage = _run_episode_to_viewpoints(
-                    env,
-                    obs,
-                    ordered,
-                    rng,
-                    max_steps=int(args.max_steps),
-                    reach_dist=float(args.reach_dist),
-                    max_target_steps=int(args.max_target_steps),
-                    min_pixels=int(args.min_visible_pixels),
-                    waypoint_reach_dist=float(args.waypoint_reach_dist),
-                )
-                quality_ok = (
-                    len(records) >= int(args.min_steps)
-                    and final_score >= float(args.min_save_score)
-                    and final_coverage >= float(args.min_save_coverage)
-                )
-                if quality_ok:
-                    out_path = (
-                        output_dir
-                        / scene_name
-                        / f"{episode_tag}_score_{final_score:.3f}_cov_{final_coverage:.3f}_vp_{len(ordered):02d}.npz"
+            if not cover:
+                scene_rejected = assigned_scene_count
+                no_cover += scene_rejected
+                rejected += scene_rejected
+                progress.set_postfix(saved=saved, rejected=rejected, no_cover=no_cover, score="0.00", cov="0.00")
+                progress.update(scene_rejected)
+                continue
+
+            for start_idx, start in enumerate(starts):
+                for yaw_idx, start_yaw in enumerate(start_yaw_degrees):
+                    local_task_idx = start_idx * len(start_yaw_degrees) + yaw_idx
+                    global_task_idx = int(scene_task_offsets[scene_idx]) + local_task_idx
+                    if global_task_idx % num_shards != shard_index:
+                        continue
+                    episode_total_start = time.perf_counter()
+                    episode_tag = (
+                        f"vp_scene_{scene_idx + 1:02d}_poi_{start.poi_id:04d}_"
+                        f"yaw_{int(round(start_yaw)) % 360:03d}"
                     )
-                    _save_episode(
-                        out_path,
-                        records,
+                    if args.skip_existing and any((output_dir / scene_name).glob(f"{episode_tag}_score_*.npz")):
+                        skipped_existing += 1
+                        if args.profile_timing:
+                            print(
+                                "[TIMING][skip_existing] "
+                                f"scene={scene_name} poi={start.poi_id} "
+                                f"yaw={int(round(start_yaw)) % 360} "
+                                f"shard={shard_index}/{num_shards}",
+                                flush=True,
+                            )
+                        progress.set_postfix(
+                            saved=saved,
+                            skipped=skipped_existing,
+                            rejected=rejected,
+                            no_cover=no_cover,
+                        )
+                        progress.update(1)
+                        continue
+                    t0 = time.perf_counter()
+                    obs = _reset_to_start(
                         env,
-                        {
-                            "scene_index": scene_idx,
-                            "start_index": start_idx,
-                            "final_score": final_score,
-                            "final_coverage": final_coverage,
-                        },
+                        scene_number=scene_idx + 1,
+                        start=start,
+                        yaw_deg=start_yaw,
+                        episode_tag=episode_tag,
+                        save_debug=bool(args.save_debug),
                     )
-                    saved += 1
-                else:
-                    rejected += 1
-                progress.set_postfix(
-                    saved=saved,
-                    rejected=rejected,
-                    no_cover=no_cover,
-                    score=f"{final_score:.2f}",
-                    cov=f"{final_coverage:.2f}",
-                    vp=len(ordered),
+                    episode_reset_seconds = time.perf_counter() - t0
+                    start_position = np.asarray(env.sim.get_agent(0).get_state().position, dtype=np.float32)
+                    t0 = time.perf_counter()
+                    ordered = _order_viewpoints(start_position, cover)
+                    order_seconds = time.perf_counter() - t0
+                    if not ordered:
+                        no_cover += 1
+                        rejected += 1
+                        progress.set_postfix(saved=saved, rejected=rejected, no_cover=no_cover, score="0.00", cov="0.00")
+                        progress.update(1)
+                        continue
+
+                    records, final_score, final_coverage, run_timing = _run_episode_to_viewpoints(
+                        env,
+                        obs,
+                        ordered,
+                        rng,
+                        max_steps=int(args.max_steps),
+                        reach_dist=float(args.reach_dist),
+                        max_target_steps=int(args.max_target_steps),
+                        min_pixels=int(args.min_visible_pixels),
+                        waypoint_reach_dist=float(args.waypoint_reach_dist),
+                        action_policy=str(args.action_policy),
+                        turn_threshold_deg=float(args.turn_threshold_deg),
+                    )
+                    quality_ok = (
+                        len(records) >= int(args.min_steps)
+                        and final_score >= float(args.min_save_score)
+                        and final_coverage >= float(args.min_save_coverage)
+                    )
+                    save_seconds = 0.0
+                    if quality_ok:
+                        out_path = (
+                            output_dir
+                            / scene_name
+                            / (
+                                f"{episode_tag}_score_{final_score:.3f}_cov_{final_coverage:.3f}_"
+                                f"vp_{len(ordered):02d}.npz"
+                            )
+                        )
+                        t0 = time.perf_counter()
+                        _save_episode(
+                            out_path,
+                            records,
+                            env,
+                            {
+                                "scene_index": scene_idx,
+                                "start_index": start_idx,
+                                "poi_index": start.index,
+                                "poi_id": start.poi_id,
+                                "start_yaw_deg": float(start_yaw),
+                                "requested_start_position": start.position,
+                                "actual_start_position": start_position,
+                                "final_score": final_score,
+                                "final_coverage": final_coverage,
+                            },
+                        )
+                        save_seconds = time.perf_counter() - t0
+                        saved += 1
+                    else:
+                        rejected += 1
+                    episode_total_seconds = time.perf_counter() - episode_total_start
+                    if args.profile_timing:
+                        print(
+                            "[TIMING][episode] "
+                            f"scene={scene_name} poi={start.poi_id} yaw={int(round(start_yaw)) % 360} "
+                            f"task={global_task_idx} shard={shard_index}/{num_shards} "
+                            f"accepted={int(quality_ok)} score={final_score:.3f} cov={final_coverage:.3f} "
+                            f"total={episode_total_seconds:.2f}s reset={episode_reset_seconds:.2f}s "
+                            f"order={order_seconds:.2f}s save={save_seconds:.2f}s "
+                            f"{_format_timing(run_timing)}",
+                            flush=True,
+                        )
+                    progress.set_postfix(
+                        saved=saved,
+                        rejected=rejected,
+                        no_cover=no_cover,
+                        score=f"{final_score:.2f}",
+                        cov=f"{final_coverage:.2f}",
+                        vp=len(ordered),
+                        poi=start.poi_id,
+                        yaw=int(round(start_yaw)) % 360,
+                    )
+                    progress.update(1)
+            if args.profile_timing:
+                print(
+                    "[TIMING][scene_done] "
+                    f"scene={scene_idx + 1}/{len(habitat_scene_ids)} name={scene_name} "
+                    f"total={time.perf_counter() - scene_total_start:.2f}s saved={saved} "
+                    f"skipped={skipped_existing} rejected={rejected} no_cover={no_cover} "
+                    f"shard={shard_index}/{num_shards}",
+                    flush=True,
                 )
-                progress.update(1)
         progress.close()
     finally:
         env.close()
 
     print(
         "[INFO] HM3D viewpoint expert dataset complete: "
-        f"saved={saved}, rejected={rejected}, no_cover={no_cover}, output={output_dir}"
+        f"saved={saved}, skipped_existing={skipped_existing}, rejected={rejected}, "
+        f"no_cover={no_cover}, shard={shard_index}/{num_shards}, output={output_dir}"
     )
 
 
@@ -464,18 +796,64 @@ def parse_args():
     parser.add_argument("--min_steps", type=int, default=80)
     parser.add_argument("--candidate_viewpoints", type=int, default=180)
     parser.add_argument("--max_cover_viewpoints", type=int, default=28)
-    parser.add_argument("--yaw_degrees", type=str, default="0,60,120,180,240,300")
+    parser.add_argument("--poi_dir", type=str, default="/home/wgy/RL/pois")
+    parser.add_argument("--start_yaw_degrees", type=str, default="0,180")
+    parser.add_argument("--viewpoint_yaw_degrees", type=str, default="0,60,120,180,240,300")
+    parser.add_argument(
+        "--yaw_degrees",
+        type=str,
+        default=None,
+        help="Deprecated alias for --viewpoint_yaw_degrees.",
+    )
     parser.add_argument("--min_visible_pixels", type=int, default=80)
     parser.add_argument("--reach_dist", type=float, default=0.45)
     parser.add_argument("--waypoint_reach_dist", type=float, default=0.30)
     parser.add_argument("--max_target_steps", type=int, default=80)
     parser.add_argument("--min_save_score", type=float, default=0.45)
     parser.add_argument("--min_save_coverage", type=float, default=0.02)
+    parser.add_argument(
+        "--action_policy",
+        type=str,
+        default="oracle",
+        choices=("oracle", "geometric"),
+        help="oracle tries candidate actions with GT visibility; geometric follows the path without oracle probes.",
+    )
+    parser.add_argument(
+        "--turn_threshold_deg",
+        type=float,
+        default=15.0,
+        help="For geometric action policy, turn until yaw error is within this threshold before moving forward.",
+    )
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--num_shards",
+        type=int,
+        default=1,
+        help="Split all scene/POI/yaw tasks into this many shards.",
+    )
+    parser.add_argument(
+        "--shard_index",
+        type=int,
+        default=0,
+        help="Run only tasks whose global task index belongs to this shard.",
+    )
     parser.add_argument("--save_debug", action="store_true")
     parser.add_argument("--save_debug_interval", type=int, default=100)
-    return parser.parse_args()
+    parser.add_argument(
+        "--skip_existing",
+        action="store_true",
+        help="Skip episodes whose output .npz already exists in the output directory.",
+    )
+    parser.add_argument(
+        "--profile_timing",
+        action="store_true",
+        help="Print per-scene and per-episode timing breakdowns for bottleneck diagnosis.",
+    )
+    args = parser.parse_args()
+    if args.yaw_degrees is not None:
+        args.viewpoint_yaw_degrees = args.yaw_degrees
+    return args
 
 
 if __name__ == "__main__":

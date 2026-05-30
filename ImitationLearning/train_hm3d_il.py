@@ -30,7 +30,15 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--seq_len", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--train_epoch_samples", type=int, default=0)
+    parser.add_argument("--val_epoch_samples", type=int, default=0)
+    parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--val_split", type=float, default=0.15)
+    parser.add_argument("--val_split_mode", choices=["file", "scene", "window"], default="file")
+    parser.add_argument("--train_sampling_mode", choices=["scene_sqrt", "none"], default="scene_sqrt")
+    parser.add_argument("--label_smoothing", type=float, default=0.05)
+    parser.add_argument("--early_stopping_patience", type=int, default=6)
+    parser.add_argument("--split_seed", type=int, default=42)
     parser.add_argument("--freeze_encoder", action="store_true")
     parser.add_argument("--gpu_id", type=int, default=0)
     return parser.parse_args()
@@ -90,6 +98,14 @@ def main():
         batch_size=int(args.batch_size),
         val_split=float(args.val_split),
         freeze_encoder=bool(args.freeze_encoder),
+        label_smoothing=float(args.label_smoothing),
+        early_stopping_patience=int(args.early_stopping_patience),
+        split_seed=int(args.split_seed),
+        val_split_mode=args.val_split_mode,
+        train_sampling_mode=args.train_sampling_mode,
+        train_epoch_samples=int(args.train_epoch_samples) if int(args.train_epoch_samples) > 0 else None,
+        val_epoch_samples=int(args.val_epoch_samples) if int(args.val_epoch_samples) > 0 else None,
+        num_workers=int(args.num_workers),
     )
     runner.run(num_epochs=int(args.epochs), save_folder=args.save_dir)
 

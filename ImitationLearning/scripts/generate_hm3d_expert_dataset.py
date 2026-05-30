@@ -111,21 +111,30 @@ def _save_episode(path: Path, records: List[Dict], env: HabitatEnv, metadata: Di
     agent_pos = poses[:, [0, 2]].astype(np.float32)
     score = np.asarray([rec["score"] for rec in records], dtype=np.float32)
     coverage = np.asarray([rec["coverage"] for rec in records], dtype=np.float32)
-    np.savez_compressed(
-        path,
-        rgb=rgbs,
-        actions=actions,
-        last_actions=last_actions,
-        pose=poses,
-        agent_pos=agent_pos,
-        score=score,
-        coverage=coverage,
-        num_actions=np.asarray([len(env.get_actions())], dtype=np.int64),
-        scene_index=np.asarray([metadata["scene_index"]], dtype=np.int64),
-        start_index=np.asarray([metadata["start_index"]], dtype=np.int64),
-        final_score=np.asarray([metadata["final_score"]], dtype=np.float32),
-        final_coverage=np.asarray([metadata["final_coverage"]], dtype=np.float32),
-    )
+    payload = {
+        "rgb": rgbs,
+        "actions": actions,
+        "last_actions": last_actions,
+        "pose": poses,
+        "agent_pos": agent_pos,
+        "score": score,
+        "coverage": coverage,
+        "num_actions": np.asarray([len(env.get_actions())], dtype=np.int64),
+        "scene_index": np.asarray([metadata["scene_index"]], dtype=np.int64),
+        "start_index": np.asarray([metadata["start_index"]], dtype=np.int64),
+        "final_score": np.asarray([metadata["final_score"]], dtype=np.float32),
+        "final_coverage": np.asarray([metadata["final_coverage"]], dtype=np.float32),
+    }
+    for key in ("poi_id", "poi_index"):
+        if key in metadata:
+            payload[key] = np.asarray([metadata[key]], dtype=np.int64)
+    if "start_yaw_deg" in metadata:
+        payload["start_yaw_deg"] = np.asarray([metadata["start_yaw_deg"]], dtype=np.float32)
+    if "requested_start_position" in metadata:
+        payload["requested_start_position"] = np.asarray(metadata["requested_start_position"], dtype=np.float32)
+    if "actual_start_position" in metadata:
+        payload["actual_start_position"] = np.asarray(metadata["actual_start_position"], dtype=np.float32)
+    np.savez_compressed(path, **payload)
 
 
 def generate(args) -> None:

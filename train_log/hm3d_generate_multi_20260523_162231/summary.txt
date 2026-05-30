@@ -1,0 +1,357 @@
+TIMESTAMP=20260523_162231
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+GPUS=3,4,5,6,7
+PER_GPU=10
+NUM_SHARDS=50
+PID=3115190
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_0_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_0_of_50_gpu_3.pid
+SHARD_INDEX=0
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=0 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_0_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_0_of_50_gpu_3.pid
+PID=3115393
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_1_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_1_of_50_gpu_3.pid
+SHARD_INDEX=1
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=1 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_1_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_1_of_50_gpu_3.pid
+PID=3115602
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_2_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_2_of_50_gpu_3.pid
+SHARD_INDEX=2
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=2 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_2_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_2_of_50_gpu_3.pid
+PID=3115848
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_3_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_3_of_50_gpu_3.pid
+SHARD_INDEX=3
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=3 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_3_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_3_of_50_gpu_3.pid
+PID=3116266
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_4_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_4_of_50_gpu_3.pid
+SHARD_INDEX=4
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=4 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_4_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_4_of_50_gpu_3.pid
+PID=3116463
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_5_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_5_of_50_gpu_3.pid
+SHARD_INDEX=5
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=5 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_5_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_5_of_50_gpu_3.pid
+PID=3116704
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_6_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_6_of_50_gpu_3.pid
+SHARD_INDEX=6
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=6 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_6_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_6_of_50_gpu_3.pid
+PID=3116902
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_7_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_7_of_50_gpu_3.pid
+SHARD_INDEX=7
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=7 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_7_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_7_of_50_gpu_3.pid
+PID=3117115
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_8_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_8_of_50_gpu_3.pid
+SHARD_INDEX=8
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=8 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_8_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_8_of_50_gpu_3.pid
+PID=3117314
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_9_of_50_gpu_3.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_9_of_50_gpu_3.pid
+SHARD_INDEX=9
+NUM_SHARDS=50
+GPU=3 SHARD_INDEX=9 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_9_of_50_gpu_3.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_9_of_50_gpu_3.pid
+PID=3117534
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_10_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_10_of_50_gpu_4.pid
+SHARD_INDEX=10
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=10 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_10_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_10_of_50_gpu_4.pid
+PID=3117775
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_11_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_11_of_50_gpu_4.pid
+SHARD_INDEX=11
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=11 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_11_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_11_of_50_gpu_4.pid
+PID=3118025
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_12_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_12_of_50_gpu_4.pid
+SHARD_INDEX=12
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=12 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_12_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_12_of_50_gpu_4.pid
+PID=3118259
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_13_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_13_of_50_gpu_4.pid
+SHARD_INDEX=13
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=13 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_13_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_13_of_50_gpu_4.pid
+PID=3118491
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_14_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_14_of_50_gpu_4.pid
+SHARD_INDEX=14
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=14 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_14_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_14_of_50_gpu_4.pid
+PID=3118702
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_15_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_15_of_50_gpu_4.pid
+SHARD_INDEX=15
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=15 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_15_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_15_of_50_gpu_4.pid
+PID=3118918
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_16_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_16_of_50_gpu_4.pid
+SHARD_INDEX=16
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=16 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_16_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_16_of_50_gpu_4.pid
+PID=3119156
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_17_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_17_of_50_gpu_4.pid
+SHARD_INDEX=17
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=17 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_17_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_17_of_50_gpu_4.pid
+PID=3119384
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_18_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_18_of_50_gpu_4.pid
+SHARD_INDEX=18
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=18 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_18_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_18_of_50_gpu_4.pid
+PID=3119628
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_19_of_50_gpu_4.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_19_of_50_gpu_4.pid
+SHARD_INDEX=19
+NUM_SHARDS=50
+GPU=4 SHARD_INDEX=19 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_19_of_50_gpu_4.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_19_of_50_gpu_4.pid
+PID=3119868
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_20_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_20_of_50_gpu_5.pid
+SHARD_INDEX=20
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=20 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_20_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_20_of_50_gpu_5.pid
+PID=3120110
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_21_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_21_of_50_gpu_5.pid
+SHARD_INDEX=21
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=21 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_21_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_21_of_50_gpu_5.pid
+PID=3120348
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_22_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_22_of_50_gpu_5.pid
+SHARD_INDEX=22
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=22 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_22_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_22_of_50_gpu_5.pid
+PID=3120592
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_23_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_23_of_50_gpu_5.pid
+SHARD_INDEX=23
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=23 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_23_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_23_of_50_gpu_5.pid
+PID=3120805
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_24_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_24_of_50_gpu_5.pid
+SHARD_INDEX=24
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=24 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_24_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_24_of_50_gpu_5.pid
+PID=3121015
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_25_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_25_of_50_gpu_5.pid
+SHARD_INDEX=25
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=25 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_25_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_25_of_50_gpu_5.pid
+PID=3121210
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_26_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_26_of_50_gpu_5.pid
+SHARD_INDEX=26
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=26 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_26_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_26_of_50_gpu_5.pid
+PID=3121411
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_27_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_27_of_50_gpu_5.pid
+SHARD_INDEX=27
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=27 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_27_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_27_of_50_gpu_5.pid
+PID=3121631
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_28_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_28_of_50_gpu_5.pid
+SHARD_INDEX=28
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=28 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_28_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_28_of_50_gpu_5.pid
+PID=3121848
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_29_of_50_gpu_5.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_29_of_50_gpu_5.pid
+SHARD_INDEX=29
+NUM_SHARDS=50
+GPU=5 SHARD_INDEX=29 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_29_of_50_gpu_5.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_29_of_50_gpu_5.pid
+PID=3122059
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_30_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_30_of_50_gpu_6.pid
+SHARD_INDEX=30
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=30 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_30_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_30_of_50_gpu_6.pid
+PID=3122272
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_31_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_31_of_50_gpu_6.pid
+SHARD_INDEX=31
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=31 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_31_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_31_of_50_gpu_6.pid
+PID=3122450
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_32_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_32_of_50_gpu_6.pid
+SHARD_INDEX=32
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=32 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_32_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_32_of_50_gpu_6.pid
+PID=3122659
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_33_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_33_of_50_gpu_6.pid
+SHARD_INDEX=33
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=33 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_33_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_33_of_50_gpu_6.pid
+PID=3122856
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_34_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_34_of_50_gpu_6.pid
+SHARD_INDEX=34
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=34 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_34_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_34_of_50_gpu_6.pid
+PID=3123100
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_35_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_35_of_50_gpu_6.pid
+SHARD_INDEX=35
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=35 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_35_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_35_of_50_gpu_6.pid
+PID=3123312
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_36_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_36_of_50_gpu_6.pid
+SHARD_INDEX=36
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=36 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_36_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_36_of_50_gpu_6.pid
+PID=3123524
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_37_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_37_of_50_gpu_6.pid
+SHARD_INDEX=37
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=37 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_37_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_37_of_50_gpu_6.pid
+PID=3123753
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_38_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_38_of_50_gpu_6.pid
+SHARD_INDEX=38
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=38 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_38_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_38_of_50_gpu_6.pid
+PID=3123976
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_39_of_50_gpu_6.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_39_of_50_gpu_6.pid
+SHARD_INDEX=39
+NUM_SHARDS=50
+GPU=6 SHARD_INDEX=39 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_39_of_50_gpu_6.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_39_of_50_gpu_6.pid
+PID=3124186
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_40_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_40_of_50_gpu_7.pid
+SHARD_INDEX=40
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=40 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_40_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_40_of_50_gpu_7.pid
+PID=3124400
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_41_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_41_of_50_gpu_7.pid
+SHARD_INDEX=41
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=41 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_41_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_41_of_50_gpu_7.pid
+PID=3124597
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_42_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_42_of_50_gpu_7.pid
+SHARD_INDEX=42
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=42 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_42_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_42_of_50_gpu_7.pid
+PID=3124834
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_43_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_43_of_50_gpu_7.pid
+SHARD_INDEX=43
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=43 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_43_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_43_of_50_gpu_7.pid
+PID=3125048
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_44_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_44_of_50_gpu_7.pid
+SHARD_INDEX=44
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=44 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_44_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_44_of_50_gpu_7.pid
+PID=3125272
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_45_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_45_of_50_gpu_7.pid
+SHARD_INDEX=45
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=45 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_45_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_45_of_50_gpu_7.pid
+PID=3125478
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_46_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_46_of_50_gpu_7.pid
+SHARD_INDEX=46
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=46 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_46_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_46_of_50_gpu_7.pid
+PID=3125694
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_47_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_47_of_50_gpu_7.pid
+SHARD_INDEX=47
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=47 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_47_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_47_of_50_gpu_7.pid
+PID=3125915
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_48_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_48_of_50_gpu_7.pid
+SHARD_INDEX=48
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=48 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_48_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_48_of_50_gpu_7.pid
+PID=3126126
+LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_49_of_50_gpu_7.log
+DATA_DIR=/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_49_of_50_gpu_7.pid
+SHARD_INDEX=49
+NUM_SHARDS=50
+GPU=7 SHARD_INDEX=49 LOG=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_49_of_50_gpu_7.log PID_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/shard_49_of_50_gpu_7.pid
+RUN_DIR=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231
+SUMMARY_FILE=/home/wgy/RL/train_log/hm3d_generate_multi_20260523_162231/summary.txt

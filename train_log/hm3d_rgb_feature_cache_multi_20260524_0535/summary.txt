@@ -1,0 +1,17 @@
+[INFO] Starting multi-GPU HM3D RGB feature cache
+[INFO] timestamp: 20260524_0535
+[INFO] data_dir: /home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50
+[INFO] feature_dir: /home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50_features
+[INFO] run_dir: /home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535
+[INFO] gpus: 3 4 5 6 7
+[INFO] per_gpu: 1
+[INFO] num_shards: 5
+[INFO] batch_size: 256
+[INFO] dtype: float16
+[INFO] Launching shard=0 gpu=3 log=/home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535/cache_gpu3_shard00.log
+[INFO] Launching shard=1 gpu=4 log=/home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535/cache_gpu4_shard01.log
+[INFO] Launching shard=2 gpu=5 log=/home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535/cache_gpu5_shard02.log
+[INFO] Launching shard=3 gpu=6 log=/home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535/cache_gpu6_shard03.log
+[INFO] Launching shard=4 gpu=7 log=/home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535/cache_gpu7_shard04.log
+[INFO] Launched 5 cache shards
+[INFO] Watch logs: tail -f /home/wgy/RL/train_log/hm3d_rgb_feature_cache_multi_20260524_0535/cache_gpu*_shard*.log

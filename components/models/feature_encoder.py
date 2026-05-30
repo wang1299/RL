@@ -107,6 +107,39 @@ class FeatureEncoder(nn.Module):
         Accepts: list of np.ndarray, PIL.Image, or torch.Tensor
         Returns: FloatTensor [N, 3, H, W]
         """
+        if rgb_list and all(
+            rgb is None
+            or (isinstance(rgb, int) and rgb == 0)
+            or (isinstance(rgb, np.ndarray) and rgb.ndim == 3 and rgb.shape[-1] == 3)
+            for rgb in rgb_list
+        ):
+            sample = next(
+                (
+                    rgb
+                    for rgb in rgb_list
+                    if rgb is not None
+                    and not (isinstance(rgb, int) and rgb == 0)
+                    and isinstance(rgb, np.ndarray)
+                ),
+                None,
+            )
+            if sample is not None:
+                height, width, channels = sample.shape
+                batch = np.zeros((len(rgb_list), height, width, channels), dtype=sample.dtype)
+                for idx, rgb in enumerate(rgb_list):
+                    if rgb is None or (isinstance(rgb, int) and rgb == 0):
+                        continue
+                    if rgb.shape != sample.shape:
+                        break
+                    batch[idx] = np.ascontiguousarray(rgb)
+                else:
+                    tensor = torch.from_numpy(batch).permute(0, 3, 1, 2).float().div_(255.0)
+                    if tensor.shape[-2:] != (224, 224):
+                        tensor = F.interpolate(tensor, size=(224, 224), mode="bilinear", align_corners=False)
+                    mean = tensor.new_tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+                    std = tensor.new_tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+                    return (tensor - mean) / std
+
         transform = T.Compose(
             [
                 T.ToTensor(),  # Converts np.ndarray/PIL → Tensor [0,1]
@@ -289,25 +322,39 @@ class FeatureEncoder(nn.Module):
         batch_dict keys: 'occupancy', 'rgb', 'lssg', 'gssg', 'agent_pos'
         """
         device = next(self.parameters()).device
-        B, T = len(batch_dict["rgb"]), len(batch_dict["rgb"][0])
+        cached_rgb_features = batch_dict.get("rgb_features")
+        if cached_rgb_features is not None:
+            if not isinstance(cached_rgb_features, torch.Tensor):
+                cached_rgb_features = torch.as_tensor(cached_rgb_features)
+            B, T = cached_rgb_features.shape[:2]
+        else:
+            B, T = len(batch_dict["rgb"]), len(batch_dict["rgb"][0])
         total_steps = B * T
 
         # --- 1. Process Standard Features (RGB, Occupancy, Action) ---
-        rgb_flat = [im for seq in batch_dict["rgb"] for im in seq]
-
-        rgb_tensor = self.preprocess_rgb(rgb_flat)
         act_flat = last_actions.view(-1).to(device)
 
-        if isinstance(self.rgb_encoder, nn.DataParallel):
-            # Keep tensor on CPU so DataParallel scatters to multiple GPUs directly.
-            rgb_feat = self.rgb_encoder(rgb_tensor)
+        if cached_rgb_features is not None:
+            rgb_feat = cached_rgb_features.to(device=device, dtype=torch.float32).reshape(total_steps, -1)
         else:
-            rgb_feat = self.rgb_encoder(rgb_tensor.to(device))
+            rgb_flat = [im for seq in batch_dict["rgb"] for im in seq]
+            rgb_tensor = self.preprocess_rgb(rgb_flat)
+            if isinstance(self.rgb_encoder, nn.DataParallel):
+                # Keep tensor on CPU so DataParallel scatters to multiple GPUs directly.
+                rgb_feat = self.rgb_encoder(rgb_tensor)
+            else:
+                rgb_feat = self.rgb_encoder(rgb_tensor.to(device))
         act_feat = self.action_emb(act_flat)
 
         # --- 2. Process Graph Features with GAT ---
-        lssg_flat = [sg for seq in batch_dict["lssg"] for sg in seq]
-        gssg_flat = [sg for seq in batch_dict["gssg"] for sg in seq]
+        if batch_dict.get("lssg") is None:
+            lssg_flat = [None] * total_steps
+        else:
+            lssg_flat = [sg for seq in batch_dict["lssg"] for sg in seq]
+        if batch_dict.get("gssg") is None:
+            gssg_flat = [None] * total_steps
+        else:
+            gssg_flat = [sg for seq in batch_dict["gssg"] for sg in seq]
 
         # Get embeddings and the indices of non-empty graphs
         lssg_embeds, lssg_valid_indices = self.get_graph_features(lssg_flat)

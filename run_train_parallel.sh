@@ -11,6 +11,7 @@ mkdir -p /home/wgy/RL/train_png
 export HF_ENDPOINT=https://hf-mirror.com
 export PYTHONPATH=$PYTHONPATH:$(pwd):/home/wgy/GroundingDINO
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTHONUNBUFFERED=1
 
 # Use physical GPUs 4,5,6,7 by masking visible devices to that set.
 # Inside the process, these map to logical CUDA devices 0,1,2,3.
@@ -39,6 +40,7 @@ echo "[INFO] WORKERS_PER_ENV_GPU: $WORKERS_PER_ENV_GPU"
 echo "[INFO] DINO_DEVICE: $DINO_DEVICE"
 echo "[INFO] DINO_DEVICES: $DINO_DEVICES"
 echo "[INFO] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "[INFO] RL_USE_TRANSFORMER: ${RL_USE_TRANSFORMER:-0}"
 if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
     echo "[INFO] POLICY_CHECKPOINT_LOAD: $POLICY_CHECKPOINT_LOAD"
 fi
@@ -56,9 +58,12 @@ EXTRA_ARGS=()
 if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
     EXTRA_ARGS+=(--policy_checkpoint_load "$POLICY_CHECKPOINT_LOAD")
 fi
+if [[ "${RL_USE_TRANSFORMER:-0}" == "1" || "${RL_USE_TRANSFORMER:-0}" == "true" || "${RL_USE_TRANSFORMER:-0}" == "TRUE" ]]; then
+    EXTRA_ARGS+=(--use_transformer)
+fi
 
-# Run training with nohup
-nohup /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_parallel.py \
+# Run training detached from the launching shell
+setsid /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_parallel.py \
     --conf_path /home/wgy/RL/config \
     --num_workers "$WORKERS_PER_ENV_GPU" \
     --episodes 100 \
@@ -73,7 +78,7 @@ nohup /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_parall
     --save_frames_to "$VIZ_DIR" \
     --save_model_to /home/wgy/RL/RL_training/runs/model_weights \
     "${EXTRA_ARGS[@]}" \
-    > "$LOG_FILE" 2>&1 &
+    > "$LOG_FILE" 2>&1 < /dev/null &
 
 PID=$!
 echo "[INFO] Training process started with PID: $PID"

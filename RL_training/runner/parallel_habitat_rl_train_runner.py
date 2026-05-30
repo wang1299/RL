@@ -21,6 +21,8 @@ from typing import List, Optional, Dict, Any
 
 import numpy as np
 import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -28,6 +30,7 @@ from components.environments.parallel_habitat_collector import ParallelHabitatCo
 from components.perception.hm3d_labels import HM3D_REWARD_EXCLUDED_LABELS
 from components.utils.observation import Observation
 from components.utils.rollout_buffer import RolloutBuffer
+from ImitationLearning.dataset.hm3d_feature_il_dataset import HM3DFeatureImitationLearningDataset
 
 
 class ParallelHabitatRLTrainRunner:
@@ -62,6 +65,14 @@ class ParallelHabitatRLTrainRunner:
         self.agent.to(self.device)
         self.agent_config = agent.agent_config
         self.navigation_config = agent.navigation_config
+        self.action_temperature = max(float(self.agent_config.get("action_temperature", 1.0)), 1e-3)
+        self.bc_coef = max(float(self.agent_config.get("bc_coef", 0.0)), 0.0)
+        self.bc_min_coef = max(float(self.agent_config.get("bc_min_coef", 0.0)), 0.0)
+        self.bc_coef_decay = bool(self.agent_config.get("bc_coef_decay", False))
+        self.bc_updates_per_rl_update = max(int(self.agent_config.get("bc_updates_per_rl_update", 0)), 0)
+        self.bc_loader = None
+        self.bc_iter = None
+        self.bc_criterion = None
         self.discovery_bonus_scale = float(self.env_config.get("discovery_bonus_scale", 1.0))
         self.det_score_thr = float(self.env_config.get("det_score_thr", 0.20))
         self.success_recall_threshold = float(self.env_config.get("success_recall_threshold", 1.00))
@@ -185,6 +196,124 @@ class ParallelHabitatRLTrainRunner:
         self.ep_info_buffer = deque(maxlen=self.log_buffer_size)
         self.global_step = 0
         self.was_interrupted = False
+        self._init_bc_regularization()
+
+    def _init_bc_regularization(self):
+        if self.bc_coef <= 0.0 or self.bc_updates_per_rl_update <= 0:
+            return
+        data_dir = self.agent_config.get("bc_data_dir")
+        if not data_dir:
+            print("[INFO] BC regularization disabled: bc_data_dir is not set")
+            return
+
+        try:
+            dataset = HM3DFeatureImitationLearningDataset(
+                data_dir,
+                seq_len=int(self.agent_config.get("bc_seq_len", 16)),
+                feature_key=str(self.agent_config.get("bc_feature_key", "rgb_features")),
+            )
+        except Exception as exc:
+            print(f"[WARN] BC regularization disabled: failed to load {data_dir}: {exc}")
+            return
+
+        if int(dataset.feature_dim) != int(self.navigation_config["rgb_dim"]):
+            print(
+                "[WARN] BC regularization disabled: feature_dim "
+                f"{dataset.feature_dim} != navigation rgb_dim {self.navigation_config['rgb_dim']}"
+            )
+            return
+
+        batch_size = max(int(self.agent_config.get("bc_batch_size", 256)), 1)
+        num_workers = max(int(self.agent_config.get("bc_num_workers", 0)), 0)
+        self.bc_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=dataset.seq_collate,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
+        )
+        self.bc_iter = iter(self.bc_loader)
+        self.bc_criterion = nn.CrossEntropyLoss(
+            ignore_index=-100,
+            label_smoothing=float(self.agent_config.get("bc_label_smoothing", 0.0)),
+        )
+        print(
+            "[INFO] BC regularization enabled: "
+            f"files={len(dataset.files)} windows={len(dataset)} batch_size={batch_size} "
+            f"coef={self.bc_coef:.4f} min_coef={self.bc_min_coef:.4f} "
+            f"updates_per_rl_update={self.bc_updates_per_rl_update}"
+        )
+
+    def _current_bc_coef(self) -> float:
+        if self.bc_loader is None or self.bc_coef <= 0.0:
+            return 0.0
+        if not self.bc_coef_decay:
+            return self.bc_coef
+        progress = 0.0
+        if self.total_episodes:
+            progress = min(float(getattr(self, "next_scene_assignment", 0)) / float(max(self.total_episodes, 1)), 1.0)
+        coef = self.bc_coef - (self.bc_coef - self.bc_min_coef) * progress
+        return max(float(coef), self.bc_min_coef)
+
+    def _next_bc_batch(self):
+        if self.bc_loader is None:
+            return None
+        try:
+            return next(self.bc_iter)
+        except StopIteration:
+            self.bc_iter = iter(self.bc_loader)
+            return next(self.bc_iter)
+
+    def _perform_bc_regularization(self):
+        if self.bc_loader is None or self.bc_criterion is None:
+            return None
+
+        coef = self._current_bc_coef()
+        if coef <= 0.0:
+            return None
+
+        losses = []
+        accs = []
+        self.agent.train()
+        for _ in range(self.bc_updates_per_rl_update):
+            batch = self._next_bc_batch()
+            if batch is None:
+                break
+            x_batch, last_actions, target_actions, _lengths = batch
+            last_actions = last_actions.to(self.device)
+            target_actions = target_actions.to(self.device)
+            if isinstance(x_batch.get("rgb_features"), torch.Tensor):
+                x_batch["rgb_features"] = x_batch["rgb_features"].to(self.device, non_blocking=True)
+
+            state_seq, _, _ = self.agent.encoder.forward_seq(x_batch, last_actions)
+            pad_mask = target_actions.eq(-100) if self.navigation_config.get("use_transformer") else None
+            logits, _value, _hidden = self.agent.policy(state_seq, pad_mask=pad_mask)
+            loss_raw = self.bc_criterion(logits.reshape(-1, logits.size(-1)), target_actions.reshape(-1))
+            loss = coef * loss_raw
+
+            self.agent.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.agent.parameters(), 0.5)
+            self.agent.optimizer.step()
+
+            with torch.no_grad():
+                valid = target_actions.ne(-100)
+                if valid.any():
+                    pred = logits.argmax(dim=-1)
+                    acc = pred.eq(target_actions).masked_select(valid).float().mean().item()
+                    accs.append(acc)
+            losses.append(float(loss_raw.item()))
+
+        if not losses:
+            return None
+        return {
+            "bc_loss": float(np.mean(losses)),
+            "bc_acc": float(np.mean(accs)) if accs else 0.0,
+            "bc_coef": float(coef),
+        }
 
     def _scene_name(self, scene_index: int) -> str:
         if 0 <= scene_index < len(self.base_scene_ids):
@@ -462,7 +591,7 @@ class ParallelHabitatRLTrainRunner:
             if value is not None:
                 value = value[:, -1]
 
-            probs = torch.softmax(logits, dim=-1)
+            probs = torch.softmax(logits / self.action_temperature, dim=-1)
             from torch.distributions import Categorical
             dist = Categorical(probs=probs)
             actions = dist.sample().tolist()
@@ -821,6 +950,16 @@ class ParallelHabitatRLTrainRunner:
             print(
                 f"[UPDATE] loss={mean_loss:.4f}, entropy={mean_entropy:.4f}, "
                 f"ret_std={mean_ret_std:.4f}"
+            )
+
+        bc_result = self._perform_bc_regularization()
+        if bc_result:
+            self.writer.add_scalar("bc/loss", bc_result["bc_loss"], self.global_step)
+            self.writer.add_scalar("bc/coef", bc_result["bc_coef"], self.global_step)
+            self.writer.add_scalar("eval/argmax_expert_action_acc", bc_result["bc_acc"], self.global_step)
+            print(
+                f"[BC] loss={bc_result['bc_loss']:.4f}, "
+                f"argmax_acc={bc_result['bc_acc']:.4f}, coef={bc_result['bc_coef']:.4f}"
             )
     
     def _get_batch_from_buffer(self, buffer: RolloutBuffer):
