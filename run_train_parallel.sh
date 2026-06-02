@@ -21,6 +21,7 @@ export DINO_DEVICE="cuda:0"
 export DINO_DEVICES="cuda:0,cuda:1,cuda:2"
 export ENV_GPU_IDS="0,1,2"
 export WORKERS_PER_ENV_GPU="${WORKERS_PER_ENV_GPU:-4}"
+export TRANSFORMER_CONTEXT_LEN="${TRANSFORMER_CONTEXT_LEN:-16}"
 
 # Get timestamp for log file naming
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -41,8 +42,12 @@ echo "[INFO] DINO_DEVICE: $DINO_DEVICE"
 echo "[INFO] DINO_DEVICES: $DINO_DEVICES"
 echo "[INFO] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "[INFO] RL_USE_TRANSFORMER: ${RL_USE_TRANSFORMER:-0}"
+echo "[INFO] TRANSFORMER_CONTEXT_LEN: $TRANSFORMER_CONTEXT_LEN"
 if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
     echo "[INFO] POLICY_CHECKPOINT_LOAD: $POLICY_CHECKPOINT_LOAD"
+fi
+if [ -n "$ENCODER_CHECKPOINT_OVERRIDE" ]; then
+    echo "[INFO] ENCODER_CHECKPOINT_OVERRIDE: $ENCODER_CHECKPOINT_OVERRIDE"
 fi
 echo "[INFO] Logical GPU mapping: cuda:0->physical 4, cuda:1->physical 5, cuda:2->physical 6, cuda:3->physical 7"
 echo "[INFO] Habitat workers and DINO use logical GPUs 0,1,2; policy/update uses logical GPU 3"
@@ -58,8 +63,12 @@ EXTRA_ARGS=()
 if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
     EXTRA_ARGS+=(--policy_checkpoint_load "$POLICY_CHECKPOINT_LOAD")
 fi
+if [ -n "$ENCODER_CHECKPOINT_OVERRIDE" ]; then
+    EXTRA_ARGS+=(--encoder_checkpoint_override "$ENCODER_CHECKPOINT_OVERRIDE")
+fi
 if [[ "${RL_USE_TRANSFORMER:-0}" == "1" || "${RL_USE_TRANSFORMER:-0}" == "true" || "${RL_USE_TRANSFORMER:-0}" == "TRUE" ]]; then
     EXTRA_ARGS+=(--use_transformer)
+    EXTRA_ARGS+=(--transformer_context_len "$TRANSFORMER_CONTEXT_LEN")
 fi
 
 # Run training detached from the launching shell

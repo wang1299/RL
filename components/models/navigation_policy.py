@@ -19,9 +19,11 @@ class NavigationPolicy(nn.Module):
         dropout=0.1,
         max_len=256,
         device=None,
+        causal=True,
     ):
         super().__init__()
         self.use_transformer = use_transformer
+        self.causal = bool(causal)
         self.hidden_dim = hidden_dim
         self.d_model = hidden_dim
         self.input_dim = input_dim
@@ -53,6 +55,12 @@ class NavigationPolicy(nn.Module):
             else None
         )
 
+    @staticmethod
+    def _causal_mask(seq_len: int, device):
+        if seq_len <= 1:
+            return None
+        return torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device), diagonal=1)
+
     def forward(self, seq, hidden=None, pad_mask=None):
         """
         seq: Tensor [B, T, D]
@@ -66,8 +74,11 @@ class NavigationPolicy(nn.Module):
             hidden = None
             seq = self.input_proj(seq)
             seq = self.pos_encoder(seq)
-            # Transformer expects src_key_padding_mask (True = PAD)
-            out = self.core(seq, src_key_padding_mask=pad_mask)
+            attn_mask = self._causal_mask(seq.size(1), seq.device) if self.causal else None
+            # Transformer expects src_key_padding_mask (True = PAD).
+            # The causal attention mask prevents token t from using future
+            # observations t+1...T during IL training and online inference.
+            out = self.core(seq, mask=attn_mask, src_key_padding_mask=pad_mask)
         else:
             out, hidden = self.core(seq, hidden)
 

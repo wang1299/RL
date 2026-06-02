@@ -15,6 +15,7 @@ This should significantly speed up wall-clock training by:
 import json
 import sys
 import os
+import csv
 from collections import deque
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -66,6 +67,8 @@ class ParallelHabitatRLTrainRunner:
         self.agent_config = agent.agent_config
         self.navigation_config = agent.navigation_config
         self.action_temperature = max(float(self.agent_config.get("action_temperature", 1.0)), 1e-3)
+        self.rollout_action_mode = str(self.agent_config.get("rollout_action_mode", "sample")).strip().lower()
+        self.rollout_epsilon = min(max(float(self.agent_config.get("rollout_epsilon", 0.0)), 0.0), 1.0)
         self.bc_coef = max(float(self.agent_config.get("bc_coef", 0.0)), 0.0)
         self.bc_min_coef = max(float(self.agent_config.get("bc_min_coef", 0.0)), 0.0)
         self.bc_coef_decay = bool(self.agent_config.get("bc_coef_decay", False))
@@ -84,6 +87,19 @@ class ParallelHabitatRLTrainRunner:
         self.reward_allow_semantic_iou_only = bool(self.env_config.get("reward_allow_semantic_iou_only", False))
         self.detection_log_interval = max(int(self.env_config.get("detection_log_interval", 100)), 1)
         self.update_batch_size = max(int(self.env_config.get("update_batch_size", 256)), 1)
+        self.forward_escape_enabled = bool(self.env_config.get("forward_escape_enabled", True))
+        self.forward_stuck_window = max(int(self.env_config.get("forward_stuck_window", 4)), 1)
+        self.forward_stuck_min_distance = max(float(self.env_config.get("forward_stuck_min_distance", 0.02)), 0.0)
+        self.forward_escape_cooldown_steps = max(int(self.env_config.get("forward_escape_cooldown_steps", 8)), 0)
+        self.forward_blocked_heading_ttl = max(int(self.env_config.get("forward_blocked_heading_ttl", 24)), 0)
+        self.no_move_escape_window = max(int(self.env_config.get("no_move_escape_window", 20)), 1)
+        self.no_move_turn_escape_window = max(int(self.env_config.get("no_move_turn_escape_window", 3)), 1)
+        self.turn_loop_escape_enabled = bool(self.env_config.get("turn_loop_escape_enabled", True))
+        self.turn_loop_escape_window = max(int(self.env_config.get("turn_loop_escape_window", 12)), 1)
+        self.turn_loop_escape_forward_min_prob = max(
+            float(self.env_config.get("turn_loop_escape_forward_min_prob", 0.0)),
+            0.0,
+        )
         self._detection_log_counter = 0
         
         # Create parallel environment collector
@@ -113,9 +129,18 @@ class ParallelHabitatRLTrainRunner:
             "fill_position_from_gt",
             "rho",
             "coverage_bonus_scale",
+            "visible_coverage_bonus_scale",
             "new_cell_reward",
             "discovery_bonus_scale",
             "collision_penalty",
+            "no_progress_window",
+            "no_progress_penalty",
+            "no_progress_min_coverage_delta",
+            "turn_penalty",
+            "stationary_turn_window",
+            "stationary_turn_penalty",
+            "stationary_turn_min_distance",
+            "stationary_turn_termination_window",
             "dino_max_box_area_ratio",
             "dino_max_box_aspect_ratio",
             "gt_validation_iou_threshold",
@@ -125,6 +150,10 @@ class ParallelHabitatRLTrainRunner:
             "success_reward",
             "reward_allow_semantic_iou_only",
             "reward_excluded_labels",
+            "visible_coverage_stride",
+            "visible_coverage_max_depth",
+            "visible_coverage_min_ray_step",
+            "random_start_yaw_degrees",
             "max_actions",
             "save_debug_interval",
             "save_debug_path",
@@ -150,6 +179,11 @@ class ParallelHabitatRLTrainRunner:
             for _ in range(num_workers)
         ]
         self.per_env_last_actions = [-1] * num_workers
+        self.per_env_forward_stuck_counts = [0] * num_workers
+        self.per_env_forward_escape_cooldowns = [0] * num_workers
+        self.per_env_blocked_forward_headings = [dict() for _ in range(num_workers)]
+        self.per_env_no_move_counts = [0] * num_workers
+        self.per_env_turn_loop_counts = [0] * num_workers
         self.per_env_scene_indices = [i % self.scene_count for i in range(num_workers)]
         self.per_env_discovered_objects = [set() for _ in range(num_workers)]
         self.per_env_discovered_instances = [set() for _ in range(num_workers)]
@@ -168,6 +202,18 @@ class ParallelHabitatRLTrainRunner:
             }
             for _ in range(num_workers)
         ]
+        self.transformer_context_len = max(
+            int(
+                self.agent_config.get(
+                    "transformer_context_len",
+                    self.agent_config.get("bc_seq_len", 16),
+                )
+            ),
+            1,
+        )
+        self.per_env_obs_history = [deque(maxlen=self.transformer_context_len) for _ in range(num_workers)]
+        self.per_env_last_action_history = [deque(maxlen=self.transformer_context_len) for _ in range(num_workers)]
+        self.per_env_action_diagnostics = [{} for _ in range(num_workers)]
         
         # Config
         self.total_episodes = self.agent_config.get("episodes", 500)
@@ -369,6 +415,87 @@ class ParallelHabitatRLTrainRunner:
             "agent_pos": [[obs.info.get("agent_pos", obs.info.get("agent_position", None))] for obs in obs_list],
         }
 
+    def _reset_transformer_history(self, env_id: Optional[int] = None):
+        if env_id is None:
+            for obs_history, action_history in zip(
+                self.per_env_obs_history,
+                self.per_env_last_action_history,
+            ):
+                obs_history.clear()
+                action_history.clear()
+            return
+
+        self.per_env_obs_history[env_id].clear()
+        self.per_env_last_action_history[env_id].clear()
+
+    def _build_transformer_history_batch(self, obs_list: List[Observation]):
+        """
+        Build a padded [B, T<=context] online history batch for Transformer policy inference.
+
+        The Transformer IL policy was trained on temporal windows, so online inference
+        should see the same recent history instead of a single frame. Padding uses -100,
+        matching the IL dataset padding sentinel, and masks padded tokens downstream.
+        """
+        histories = []
+        action_histories = []
+        max_t = 1
+
+        for env_id, obs in enumerate(obs_list):
+            self.per_env_obs_history[env_id].append(obs)
+            self.per_env_last_action_history[env_id].append(self.per_env_last_actions[env_id])
+            obs_history = list(self.per_env_obs_history[env_id])
+            action_history = list(self.per_env_last_action_history[env_id])
+            histories.append(obs_history)
+            action_histories.append(action_history)
+            max_t = max(max_t, len(obs_history))
+
+        rgb_batch = []
+        lssg_batch = []
+        gssg_batch = []
+        occ_batch = []
+        pos_batch = []
+        masks = []
+        last_actions = torch.full((len(obs_list), max_t), -100, dtype=torch.long, device=self.device)
+
+        for batch_idx, obs_history in enumerate(histories):
+            length = len(obs_history)
+            pad_len = max_t - length
+            rgb_seq = [obs.state[0] for obs in obs_history] + [0] * pad_len
+            lssg_seq = [obs.state[1] for obs in obs_history] + [None] * pad_len
+            gssg_seq = [obs.state[2] for obs in obs_history] + [None] * pad_len
+            occ_seq = [obs.state[3] for obs in obs_history] + [0] * pad_len
+            pos_seq = [
+                obs.info.get("agent_pos", obs.info.get("agent_position", None))
+                for obs in obs_history
+            ] + [None] * pad_len
+            mask = [1] * length + [0] * pad_len
+
+            rgb_batch.append(rgb_seq)
+            lssg_batch.append(lssg_seq)
+            gssg_batch.append(gssg_seq)
+            occ_batch.append(occ_seq)
+            pos_batch.append(pos_seq)
+            masks.append(mask)
+
+            last_actions[batch_idx, :length] = torch.as_tensor(
+                action_histories[batch_idx],
+                dtype=torch.long,
+                device=self.device,
+            )
+
+        batch_dict = {
+            "rgb": rgb_batch,
+            "lssg": lssg_batch,
+            "gssg": gssg_batch,
+            "occupancy": occ_batch,
+            "agent_pos": pos_batch,
+            "lssg_mask": masks,
+            "gssg_mask": masks,
+        }
+        pad_mask = ~torch.as_tensor(masks, dtype=torch.bool, device=self.device)
+        last_indices = torch.as_tensor([len(history) - 1 for history in histories], dtype=torch.long, device=self.device)
+        return batch_dict, last_actions, pad_mask, last_indices
+
     def _stack_lstm_hidden(self, hidden_list, hidden_size: int):
         """Stack per-env LSTM hidden states into [num_layers, B, H]."""
         num_layers = 2
@@ -531,27 +658,45 @@ class ParallelHabitatRLTrainRunner:
             and coverage >= self.success_min_coverage
         )
     
-    def _get_batch_actions(self, obs_list: List[Observation]):
+    def _get_batch_actions(self, obs_list: List[Observation], deterministic: bool = False):
         """
         Get actions for all environments in parallel via a single batch forward.
         """
         if not obs_list:
             return [], np.array([])
 
-        with torch.no_grad():
-            batch_dict = self._build_batch_dict(obs_list)
-            last_actions = torch.tensor(
-                [[action] for action in self.per_env_last_actions],
-                dtype=torch.long,
-                device=self.device,
-            )
+        def yaw_bucket(obs: Observation) -> Optional[int]:
+            if not obs.info:
+                return None
+            yaw = obs.info.get("yaw_deg")
+            if yaw is None:
+                return None
+            try:
+                # Habitat turns are 30 degrees here, so bucketing to 30-degree bins
+                # preserves the actionable heading while tolerating float noise.
+                return int(round(float(yaw) / 30.0)) % 12
+            except (TypeError, ValueError):
+                return None
 
+        with torch.no_grad():
             if self.navigation_config.get("use_transformer"):
+                batch_dict, last_actions, pad_mask, last_indices = self._build_transformer_history_batch(obs_list)
                 state_seq, _, _ = self.agent.encoder(batch_dict, last_actions)
+                logits, value, _ = self.agent.policy(
+                    state_seq,
+                    hidden=None,
+                    pad_mask=pad_mask,
+                )
                 policy_hidden = None
                 lssg_hidden_out = [None] * len(obs_list)
                 gssg_hidden_out = [None] * len(obs_list)
             else:
+                batch_dict = self._build_batch_dict(obs_list)
+                last_actions = torch.tensor(
+                    [[action] for action in self.per_env_last_actions],
+                    dtype=torch.long,
+                    device=self.device,
+                )
                 hidden_size = self.agent.encoder.lssg_encoder.lstm.hidden_size
                 lssg_hidden = self._stack_lstm_hidden(
                     [hidden["lssg"] for hidden in self.per_env_hidden_states],
@@ -575,27 +720,124 @@ class ParallelHabitatRLTrainRunner:
                 lssg_hidden_out = self._split_lstm_hidden(new_lssg)
                 gssg_hidden_out = self._split_lstm_hidden(new_gssg)
 
-            logits, value, new_policy_hidden = self.agent.policy(
-                state_seq,
-                hidden=policy_hidden,
-            )
+                logits, value, new_policy_hidden = self.agent.policy(
+                    state_seq,
+                    hidden=policy_hidden,
+                )
 
-            if not self.navigation_config.get("use_transformer"):
+            if self.navigation_config.get("use_transformer"):
+                batch_indices = torch.arange(len(obs_list), dtype=torch.long, device=self.device)
+                logits = logits[batch_indices, last_indices, :]
+                if value is not None:
+                    value = value[batch_indices, last_indices]
+            else:
                 policy_hidden_out = self._split_lstm_hidden(new_policy_hidden)
                 for env_id in range(self.num_workers):
                     self.per_env_hidden_states[env_id]["lssg"] = lssg_hidden_out[env_id]
                     self.per_env_hidden_states[env_id]["gssg"] = gssg_hidden_out[env_id]
                     self.per_env_hidden_states[env_id]["policy"] = policy_hidden_out[env_id]
-
-            logits = logits[:, -1, :]
-            if value is not None:
-                value = value[:, -1]
+                logits = logits[:, -1, :]
+                if value is not None:
+                    value = value[:, -1]
 
             probs = torch.softmax(logits / self.action_temperature, dim=-1)
-            from torch.distributions import Categorical
-            dist = Categorical(probs=probs)
-            actions = dist.sample().tolist()
+            entropy = -(probs * torch.log(probs.clamp_min(1e-8))).sum(dim=-1)
+            if deterministic:
+                actions = torch.argmax(probs, dim=-1).tolist()
+            elif self.rollout_action_mode in {"argmax", "greedy"}:
+                actions = torch.argmax(probs, dim=-1).tolist()
+            elif self.rollout_action_mode in {"argmax_epsilon", "epsilon_argmax", "epsilon_greedy"}:
+                from torch.distributions import Categorical
+                greedy_actions = torch.argmax(probs, dim=-1)
+                if self.rollout_epsilon > 0.0:
+                    dist = Categorical(probs=probs)
+                    sampled_actions = dist.sample()
+                    explore = torch.rand(len(obs_list), device=probs.device) < self.rollout_epsilon
+                    actions_tensor = torch.where(explore, sampled_actions, greedy_actions)
+                else:
+                    actions_tensor = greedy_actions
+                actions = actions_tensor.tolist()
+            else:
+                from torch.distributions import Categorical
+                dist = Categorical(probs=probs)
+                actions = dist.sample().tolist()
+            raw_actions = [int(action) for action in actions]
+            if self.forward_escape_enabled:
+                for env_id, action in enumerate(actions):
+                    blocked_headings = (
+                        self.per_env_blocked_forward_headings[env_id]
+                        if env_id < len(self.per_env_blocked_forward_headings)
+                        else {}
+                    )
+                    heading_bucket = yaw_bucket(obs_list[env_id])
+                    heading_blocked = (
+                        heading_bucket is not None
+                        and blocked_headings.get(heading_bucket, 0) > 0
+                    )
+                    if (
+                        int(action) == 2
+                        and env_id < len(self.per_env_forward_stuck_counts)
+                        and (
+                            self.per_env_forward_stuck_counts[env_id] >= self.forward_stuck_window
+                            or self.per_env_forward_escape_cooldowns[env_id] > 0
+                            or heading_blocked
+                        )
+                    ):
+                        # If repeated forward actions are not moving the agent, rotate for a
+                        # short cooldown so the next forward is tried from a different heading.
+                        actions[env_id] = 0 if probs[env_id, 0] >= probs[env_id, 1] else 1
             values = value.tolist() if value is not None else [0.0] * len(actions)
+            probs_cpu = probs.detach().cpu().numpy()
+            entropy_cpu = entropy.detach().cpu().numpy()
+            self.per_env_action_diagnostics = []
+            for env_id, action in enumerate(actions):
+                policy_action = raw_actions[env_id] if env_id < len(raw_actions) else int(action)
+                overridden = int(action) != policy_action
+                heading_bucket = yaw_bucket(obs_list[env_id])
+                heading_blocked = (
+                    heading_bucket is not None
+                    and env_id < len(self.per_env_blocked_forward_headings)
+                    and self.per_env_blocked_forward_headings[env_id].get(heading_bucket, 0) > 0
+                )
+                if (
+                    self.turn_loop_escape_enabled
+                    and policy_action in (0, 1)
+                    and env_id < len(self.per_env_turn_loop_counts)
+                    and self.per_env_turn_loop_counts[env_id] >= (
+                        self.no_move_turn_escape_window
+                        if (
+                            env_id < len(self.per_env_no_move_counts)
+                            and self.per_env_no_move_counts[env_id] >= self.no_move_escape_window
+                        )
+                        else self.turn_loop_escape_window
+                    )
+                    and probs_cpu[env_id, 2] >= self.turn_loop_escape_forward_min_prob
+                    and not heading_blocked
+                ):
+                    action = 2
+                    actions[env_id] = action
+                    overridden = True
+                row = {
+                    "action": int(action),
+                    "policy_action": policy_action,
+                    "action_overridden": int(overridden),
+                    "forward_escape_cooldown": int(self.per_env_forward_escape_cooldowns[env_id])
+                    if env_id < len(self.per_env_forward_escape_cooldowns)
+                    else 0,
+                    "forward_heading_blocked": int(heading_blocked),
+                    "turn_loop_count": int(self.per_env_turn_loop_counts[env_id])
+                    if env_id < len(self.per_env_turn_loop_counts)
+                    else 0,
+                    "no_move_count": int(self.per_env_no_move_counts[env_id])
+                    if env_id < len(self.per_env_no_move_counts)
+                    else 0,
+                    "last_action": int(self.per_env_last_actions[env_id]) if env_id < len(self.per_env_last_actions) else -1,
+                    "prob_left": float(probs_cpu[env_id, 0]) if probs_cpu.shape[1] > 0 else 0.0,
+                    "prob_right": float(probs_cpu[env_id, 1]) if probs_cpu.shape[1] > 1 else 0.0,
+                    "prob_forward": float(probs_cpu[env_id, 2]) if probs_cpu.shape[1] > 2 else 0.0,
+                    "entropy": float(entropy_cpu[env_id]),
+                }
+                self.per_env_action_diagnostics.append(row)
 
         return actions, np.array(values)
     
@@ -639,6 +881,11 @@ class ParallelHabitatRLTrainRunner:
         for buffer in self.per_env_buffers:
             buffer.clear()
         self.per_env_last_actions = [-1] * self.num_workers
+        self.per_env_forward_stuck_counts = [0] * self.num_workers
+        self.per_env_forward_escape_cooldowns = [0] * self.num_workers
+        self.per_env_blocked_forward_headings = [dict() for _ in range(self.num_workers)]
+        self.per_env_no_move_counts = [0] * self.num_workers
+        self.per_env_turn_loop_counts = [0] * self.num_workers
         self.per_env_discovered_objects = [set() for _ in range(self.num_workers)]
         self.per_env_discovered_instances = [set() for _ in range(self.num_workers)]
         self.per_env_discovered_gt_ids = [set() for _ in range(self.num_workers)]
@@ -647,6 +894,7 @@ class ParallelHabitatRLTrainRunner:
             hidden_dict["lssg"] = None
             hidden_dict["gssg"] = None
             hidden_dict["policy"] = None
+        self._reset_transformer_history()
         self.episode_step_counters = [0] * self.num_workers
         
         step_in_rollout = 0
@@ -672,7 +920,7 @@ class ParallelHabitatRLTrainRunner:
                 
                 # Step all environments
                 try:
-                    obs_list = self.env_collector.step_all(actions)
+                    obs_list = self.env_collector.step_all(actions, self.per_env_action_diagnostics)
                 except Exception as e:
                     print(f"[ERROR] Parallel step failed: {e}")
                     break
@@ -727,6 +975,37 @@ class ParallelHabitatRLTrainRunner:
                     )
                     
                     self.per_env_last_actions[env_id] = actions[env_id]
+                    moved_distance = 0.0
+                    if obs.info:
+                        moved_distance = float(obs.info.get("moved_distance", 0.0) or 0.0)
+                    if moved_distance <= self.forward_stuck_min_distance:
+                        self.per_env_no_move_counts[env_id] += 1
+                    else:
+                        self.per_env_no_move_counts[env_id] = 0
+                    blocked_headings = self.per_env_blocked_forward_headings[env_id]
+                    for heading in list(blocked_headings):
+                        blocked_headings[heading] -= 1
+                        if blocked_headings[heading] <= 0:
+                            del blocked_headings[heading]
+                    if int(actions[env_id]) == 2 and moved_distance <= self.forward_stuck_min_distance:
+                        self.per_env_forward_stuck_counts[env_id] += 1
+                        if self.per_env_forward_stuck_counts[env_id] >= self.forward_stuck_window:
+                            self.per_env_forward_escape_cooldowns[env_id] = self.forward_escape_cooldown_steps
+                        if self.forward_blocked_heading_ttl > 0 and obs.info:
+                            yaw = obs.info.get("yaw_deg")
+                            if yaw is not None:
+                                try:
+                                    blocked_headings[int(round(float(yaw) / 30.0)) % 12] = self.forward_blocked_heading_ttl
+                                except (TypeError, ValueError):
+                                    pass
+                    else:
+                        self.per_env_forward_stuck_counts[env_id] = 0
+                    if self.per_env_forward_escape_cooldowns[env_id] > 0 and int(actions[env_id]) != 2:
+                        self.per_env_forward_escape_cooldowns[env_id] -= 1
+                    if int(actions[env_id]) in (0, 1):
+                        self.per_env_turn_loop_counts[env_id] += 1
+                    else:
+                        self.per_env_turn_loop_counts[env_id] = 0
                     self.episode_step_counters[env_id] += 1
                     total_steps_collected += 1
                     rollout_steps_collected += 1
@@ -735,15 +1014,21 @@ class ParallelHabitatRLTrainRunner:
                     if obs.info:
                         score = obs.info.get("score", 0.0)
                         coverage = obs.info.get("coverage", 0.0)
+                        path_coverage = obs.info.get("path_coverage", 0.0)
+                        visible_coverage = obs.info.get("visible_coverage", 0.0)
                         self.writer.add_scalar(f"env_{env_id}/reward", reward, self.global_step)
                         self.writer.add_scalar(f"env_{env_id}/score", score, self.global_step)
                         self.writer.add_scalar(f"env_{env_id}/coverage", coverage, self.global_step)
+                        self.writer.add_scalar(f"env_{env_id}/path_coverage", path_coverage, self.global_step)
+                        self.writer.add_scalar(f"env_{env_id}/visible_coverage", visible_coverage, self.global_step)
                     
                     # Reset if done
                     if done:
                         if obs.info:
                             ep_score = obs.info.get("score", 0.0)
                             ep_coverage = obs.info.get("coverage", 0.0)
+                            ep_path_coverage = obs.info.get("path_coverage", 0.0)
+                            ep_visible_coverage = obs.info.get("visible_coverage", 0.0)
                             ep_discovered_gt = int(obs.info.get("num_discovered_gt", obs.info.get("num_discovered", 0)) or 0)
                             ep_total_gt = int(obs.info.get("scene_reward_gt_count", 0) or 0)
                             ep_steps = self.episode_step_counters[env_id]
@@ -759,6 +1044,8 @@ class ParallelHabitatRLTrainRunner:
                             self.ep_info_buffer.append({
                                 "score": ep_score,
                                 "coverage": ep_coverage,
+                                "path_coverage": ep_path_coverage,
+                                "visible_coverage": ep_visible_coverage,
                                 "num_discovered_gt": ep_discovered_gt,
                                 "scene_reward_gt_count": ep_total_gt,
                                 "steps": ep_steps,
@@ -785,6 +1072,7 @@ class ParallelHabitatRLTrainRunner:
                                 f"Scene={scene_number}/{self.scene_count}({scene_name}), "
                                 f"SceneEp={scene_episode_no}, "
                                 f"Score={ep_score:.2f}, Coverage={ep_coverage:.2f}, "
+                                f"PathCov={ep_path_coverage:.2f}, VisCov={ep_visible_coverage:.2f}, "
                                 f"GT={ep_discovered_gt}/{ep_total_gt}, Steps={ep_steps}"
                             )
 
@@ -811,11 +1099,17 @@ class ParallelHabitatRLTrainRunner:
                         
                         self.episode_step_counters[env_id] = 0
                         self.per_env_last_actions[env_id] = -1
+                        self.per_env_forward_stuck_counts[env_id] = 0
+                        self.per_env_forward_escape_cooldowns[env_id] = 0
+                        self.per_env_blocked_forward_headings[env_id] = {}
+                        self.per_env_no_move_counts[env_id] = 0
+                        self.per_env_turn_loop_counts[env_id] = 0
                         
                         # Reset hidden states
                         self.per_env_hidden_states[env_id]["lssg"] = None
                         self.per_env_hidden_states[env_id]["gssg"] = None
                         self.per_env_hidden_states[env_id]["policy"] = None
+                        self._reset_transformer_history(env_id)
                         
                         episode_count += 1
                         
@@ -846,13 +1140,18 @@ class ParallelHabitatRLTrainRunner:
                     if len(self.ep_info_buffer) > 0:
                         avg_score = np.mean([e["score"] for e in self.ep_info_buffer])
                         avg_coverage = np.mean([e.get("coverage", 0.0) for e in self.ep_info_buffer])
+                        avg_path_coverage = np.mean([e.get("path_coverage", 0.0) for e in self.ep_info_buffer])
+                        avg_visible_coverage = np.mean([e.get("visible_coverage", 0.0) for e in self.ep_info_buffer])
                         avg_steps = np.mean([e["steps"] for e in self.ep_info_buffer])
                         self.writer.add_scalar("train/avg_score", avg_score, episode_count)
                         self.writer.add_scalar("train/avg_coverage", avg_coverage, episode_count)
+                        self.writer.add_scalar("train/avg_path_coverage", avg_path_coverage, episode_count)
+                        self.writer.add_scalar("train/avg_visible_coverage", avg_visible_coverage, episode_count)
                         self.writer.add_scalar("train/avg_steps", avg_steps, episode_count)
                         self.writer.add_scalar("train/max_score", max_score, episode_count)
                         print(
                             f"[STATS] Avg Score: {avg_score:.2f}, Avg Coverage: {avg_coverage:.2f}, "
+                            f"PathCov: {avg_path_coverage:.2f}, VisCov: {avg_visible_coverage:.2f}, "
                             f"Avg Steps: {avg_steps:.1f}, Max Score: {max_score:.2f}"
                         )
         
@@ -868,6 +1167,339 @@ class ParallelHabitatRLTrainRunner:
             self.env_collector.close()
             self.writer.close()
             print("[INFO] Training finished")
+
+    def evaluate_policy(
+        self,
+        deterministic: bool = True,
+        output_csv: Optional[str] = None,
+        random_start: bool = True,
+        stop_on_success: bool = True,
+    ):
+        """
+        Run policy rollouts in the Habitat RL environment without any optimizer update.
+
+        This keeps the same scene scheduler, DINO validation, score, and coverage
+        accounting used by training, but never fills rollout buffers or calls
+        agent.update(). It is meant to measure the real behavior of an IL
+        checkpoint inside the RL environment.
+        """
+        use_tqdm = sys.stderr.isatty()
+        pbar = None
+        if use_tqdm:
+            mode = "argmax" if deterministic else "sample"
+            pbar = tqdm(total=self.total_episodes, desc=f"Eval {mode}", ncols=160, leave=False)
+
+        self.agent.eval()
+        episode_count = 0
+        total_steps_collected = 0
+        max_score = 0.0
+        results = []
+        csv_file = None
+        csv_writer = None
+
+        if output_csv:
+            output_dir = os.path.dirname(output_csv)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            csv_file = open(output_csv, "w", newline="", encoding="utf-8")
+            csv_writer = csv.DictWriter(
+                csv_file,
+                fieldnames=[
+                    "completed_episode",
+                    "epoch",
+                    "assigned_episode",
+                    "env_id",
+                    "worker_episode",
+                    "scene_index",
+                    "scene_number",
+                    "scene_name",
+                    "scene_episode",
+                    "score",
+                    "coverage",
+                    "path_coverage",
+                    "visible_coverage",
+                    "num_discovered_gt",
+                    "scene_reward_gt_count",
+                    "steps",
+                    "success",
+                    "success_reason",
+                ],
+            )
+            csv_writer.writeheader()
+
+        self._reset_scene_scheduler()
+        for env_id in range(self.num_workers):
+            self._claim_scene_for_env(env_id)
+        self.per_env_episode_counts = [0] * self.num_workers
+        self.scene_episode_counts = [0] * self.scene_count
+
+        print("[INFO] Initializing parallel environments for policy evaluation...")
+        try:
+            initial_scene_ids = [str(scene_index + 1) for scene_index in self.per_env_scene_indices]
+            initial_episode_tags = [
+                self._episode_tag(env_id, scene_index)
+                for env_id, scene_index in enumerate(self.per_env_scene_indices)
+            ]
+            obs_list = self.env_collector.reset_all(
+                scene_ids=initial_scene_ids,
+                random_start=random_start,
+                episode_tags=initial_episode_tags,
+            )
+        except Exception as exc:
+            print(f"[ERROR] Failed to reset environments for evaluation: {exc}")
+            self.env_collector.close()
+            if csv_file is not None:
+                csv_file.close()
+            return results
+
+        self.per_env_last_actions = [-1] * self.num_workers
+        self.per_env_forward_stuck_counts = [0] * self.num_workers
+        self.per_env_forward_escape_cooldowns = [0] * self.num_workers
+        self.per_env_blocked_forward_headings = [dict() for _ in range(self.num_workers)]
+        self.per_env_no_move_counts = [0] * self.num_workers
+        self.per_env_turn_loop_counts = [0] * self.num_workers
+        self.per_env_discovered_objects = [set() for _ in range(self.num_workers)]
+        self.per_env_discovered_instances = [set() for _ in range(self.num_workers)]
+        self.per_env_discovered_gt_ids = [set() for _ in range(self.num_workers)]
+        self.per_env_prev_score = [0.0] * self.num_workers
+        for hidden_dict in self.per_env_hidden_states:
+            hidden_dict["lssg"] = None
+            hidden_dict["gssg"] = None
+            hidden_dict["policy"] = None
+        self._reset_transformer_history()
+        self.episode_step_counters = [0] * self.num_workers
+
+        try:
+            while episode_count < self.total_episodes:
+                actions, _values = self._get_batch_actions(obs_list, deterministic=deterministic)
+
+                try:
+                    obs_list = self.env_collector.step_all(actions, self.per_env_action_diagnostics)
+                except Exception as exc:
+                    print(f"[ERROR] Parallel eval step failed: {exc}")
+                    break
+
+                detection_batches = self._run_detection_batch(obs_list)
+                if self.detection_service is not None:
+                    try:
+                        detection_batches = self.env_collector.annotate_detections_all(detection_batches)
+                    except Exception as exc:
+                        print(f"[WARN] Failed to annotate DINO detections in workers: {exc}")
+                self._summarize_detection_batches(detection_batches)
+
+                for env_id, obs in enumerate(obs_list):
+                    if episode_count >= self.total_episodes:
+                        break
+
+                    terminated = obs.terminated
+                    truncated = obs.truncated
+                    done = terminated or truncated
+
+                    score, _det_bonus = self._apply_detection_reward(
+                        env_id,
+                        obs,
+                        detection_batches[env_id] if env_id < len(detection_batches) else [],
+                    )
+                    if obs.info is None:
+                        obs.info = {}
+                    obs.info["score"] = float(score)
+
+                    success = self._is_success(obs, score)
+                    obs.info["success"] = bool(success)
+                    if success:
+                        obs.info["success_reason"] = "object_recall_and_coverage"
+                        if stop_on_success and not done:
+                            terminated = True
+                            done = True
+                            obs.terminated = True
+
+                    self.per_env_last_actions[env_id] = actions[env_id]
+                    moved_distance = 0.0
+                    if obs.info:
+                        moved_distance = float(obs.info.get("moved_distance", 0.0) or 0.0)
+                    if moved_distance <= self.forward_stuck_min_distance:
+                        self.per_env_no_move_counts[env_id] += 1
+                    else:
+                        self.per_env_no_move_counts[env_id] = 0
+                    blocked_headings = self.per_env_blocked_forward_headings[env_id]
+                    for heading in list(blocked_headings):
+                        blocked_headings[heading] -= 1
+                        if blocked_headings[heading] <= 0:
+                            del blocked_headings[heading]
+                    if int(actions[env_id]) == 2 and moved_distance <= self.forward_stuck_min_distance:
+                        self.per_env_forward_stuck_counts[env_id] += 1
+                        if self.per_env_forward_stuck_counts[env_id] >= self.forward_stuck_window:
+                            self.per_env_forward_escape_cooldowns[env_id] = self.forward_escape_cooldown_steps
+                        if self.forward_blocked_heading_ttl > 0 and obs.info:
+                            yaw = obs.info.get("yaw_deg")
+                            if yaw is not None:
+                                try:
+                                    blocked_headings[int(round(float(yaw) / 30.0)) % 12] = self.forward_blocked_heading_ttl
+                                except (TypeError, ValueError):
+                                    pass
+                    else:
+                        self.per_env_forward_stuck_counts[env_id] = 0
+                    if self.per_env_forward_escape_cooldowns[env_id] > 0 and int(actions[env_id]) != 2:
+                        self.per_env_forward_escape_cooldowns[env_id] -= 1
+                    if int(actions[env_id]) in (0, 1):
+                        self.per_env_turn_loop_counts[env_id] += 1
+                    else:
+                        self.per_env_turn_loop_counts[env_id] = 0
+                    self.episode_step_counters[env_id] += 1
+                    total_steps_collected += 1
+
+                    if obs.info:
+                        self.writer.add_scalar(f"eval/env_{env_id}/score", obs.info.get("score", 0.0), self.global_step)
+                        self.writer.add_scalar(f"eval/env_{env_id}/coverage", obs.info.get("coverage", 0.0), self.global_step)
+                        self.writer.add_scalar(f"eval/env_{env_id}/path_coverage", obs.info.get("path_coverage", 0.0), self.global_step)
+                        self.writer.add_scalar(f"eval/env_{env_id}/visible_coverage", obs.info.get("visible_coverage", 0.0), self.global_step)
+
+                    if done:
+                        ep_score = float(obs.info.get("score", 0.0) if obs.info else 0.0)
+                        ep_coverage = float(obs.info.get("coverage", 0.0) if obs.info else 0.0)
+                        ep_path_coverage = float(obs.info.get("path_coverage", 0.0) if obs.info else 0.0)
+                        ep_visible_coverage = float(obs.info.get("visible_coverage", 0.0) if obs.info else 0.0)
+                        ep_discovered_gt = int(obs.info.get("num_discovered_gt", obs.info.get("num_discovered", 0)) or 0) if obs.info else 0
+                        ep_total_gt = int(obs.info.get("scene_reward_gt_count", 0) or 0) if obs.info else 0
+                        ep_steps = self.episode_step_counters[env_id]
+                        scene_index = self.per_env_scene_indices[env_id]
+                        scene_number = scene_index + 1
+                        scene_name = self._scene_name(scene_index)
+                        worker_episode_no = self.per_env_episode_counts[env_id] + 1
+                        scene_episode_no = self.scene_episode_counts[scene_index] + 1
+                        completed_episode_no = episode_count + 1
+                        assigned_episode_no = self.per_env_scene_assignment_numbers[env_id]
+                        epoch_no = self.per_env_scene_epochs[env_id]
+                        self.scene_episode_counts[scene_index] = scene_episode_no
+                        success_flag = bool(obs.info.get("success", False)) if obs.info else False
+                        success_reason = str(obs.info.get("success_reason", "")) if obs.info else ""
+
+                        result = {
+                            "completed_episode": completed_episode_no,
+                            "epoch": epoch_no,
+                            "assigned_episode": assigned_episode_no,
+                            "env_id": env_id + 1,
+                            "worker_episode": worker_episode_no,
+                            "scene_index": scene_index,
+                            "scene_number": scene_number,
+                            "scene_name": scene_name,
+                            "scene_episode": scene_episode_no,
+                            "score": ep_score,
+                            "coverage": ep_coverage,
+                            "path_coverage": ep_path_coverage,
+                            "visible_coverage": ep_visible_coverage,
+                            "num_discovered_gt": ep_discovered_gt,
+                            "scene_reward_gt_count": ep_total_gt,
+                            "steps": ep_steps,
+                            "success": success_flag,
+                            "success_reason": success_reason,
+                        }
+                        results.append(result)
+                        if csv_writer is not None:
+                            csv_writer.writerow(result)
+                            csv_file.flush()
+
+                        if ep_score > max_score:
+                            max_score = ep_score
+
+                        print(
+                            f"[EVAL Epoch {epoch_no}] "
+                            f"Env={env_id + 1}/{self.num_workers}, "
+                            f"AssignedEp={assigned_episode_no}, "
+                            f"CompletedEp={completed_episode_no}, "
+                            f"WorkerEp={worker_episode_no}, "
+                            f"Scene={scene_number}/{self.scene_count}({scene_name}), "
+                            f"SceneEp={scene_episode_no}, "
+                            f"Score={ep_score:.2f}, Coverage={ep_coverage:.2f}, "
+                            f"PathCov={ep_path_coverage:.2f}, VisCov={ep_visible_coverage:.2f}, "
+                            f"GT={ep_discovered_gt}/{ep_total_gt}, Steps={ep_steps}, "
+                            f"Success={success_flag}"
+                        )
+
+                        try:
+                            reason = "success" if success_flag else "done"
+                            self.env_collector.finalize_one(env_id, reason=reason)
+                        except Exception as exc:
+                            print(f"[WARN] Failed to finalize eval worker {env_id} episode: {exc}")
+
+                        self.per_env_episode_counts[env_id] += 1
+                        episode_count += 1
+                        if pbar:
+                            pbar.update(1)
+
+                        if episode_count >= self.total_episodes:
+                            continue
+
+                        next_scene_index = self._claim_scene_for_env(env_id)
+                        obs_list[env_id] = self.env_collector.reset_one(
+                            env_id,
+                            scene_id=str(next_scene_index + 1),
+                            random_start=random_start,
+                            episode_tag=self._episode_tag(env_id, next_scene_index),
+                        )
+
+                        self.per_env_discovered_objects[env_id].clear()
+                        self.per_env_discovered_instances[env_id].clear()
+                        self.per_env_discovered_gt_ids[env_id].clear()
+                        self.per_env_prev_score[env_id] = 0.0
+                        self.episode_step_counters[env_id] = 0
+                        self.per_env_last_actions[env_id] = -1
+                        self.per_env_forward_stuck_counts[env_id] = 0
+                        self.per_env_forward_escape_cooldowns[env_id] = 0
+                        self.per_env_blocked_forward_headings[env_id] = {}
+                        self.per_env_no_move_counts[env_id] = 0
+                        self.per_env_turn_loop_counts[env_id] = 0
+                        self.per_env_hidden_states[env_id]["lssg"] = None
+                        self.per_env_hidden_states[env_id]["gssg"] = None
+                        self.per_env_hidden_states[env_id]["policy"] = None
+                        self._reset_transformer_history(env_id)
+
+                self.global_step += 1
+
+        except KeyboardInterrupt:
+            self.was_interrupted = True
+            print("\n[INFO] Policy evaluation interrupted by user")
+        finally:
+            if pbar:
+                pbar.close()
+            if results:
+                avg_score = float(np.mean([item["score"] for item in results]))
+                avg_coverage = float(np.mean([item["coverage"] for item in results]))
+                avg_path_coverage = float(np.mean([item["path_coverage"] for item in results]))
+                avg_visible_coverage = float(np.mean([item["visible_coverage"] for item in results]))
+                avg_steps = float(np.mean([item["steps"] for item in results]))
+                success_rate = float(np.mean([1.0 if item["success"] else 0.0 for item in results]))
+                self.writer.add_scalar("eval/avg_score", avg_score, episode_count)
+                self.writer.add_scalar("eval/avg_coverage", avg_coverage, episode_count)
+                self.writer.add_scalar("eval/avg_path_coverage", avg_path_coverage, episode_count)
+                self.writer.add_scalar("eval/avg_visible_coverage", avg_visible_coverage, episode_count)
+                self.writer.add_scalar("eval/avg_steps", avg_steps, episode_count)
+                self.writer.add_scalar("eval/success_rate", success_rate, episode_count)
+                self.writer.add_scalar("eval/max_score", max_score, episode_count)
+                print(
+                    "[EVAL SUMMARY] "
+                    f"Episodes={len(results)}, Avg Score={avg_score:.3f}, "
+                    f"Avg Coverage={avg_coverage:.3f}, PathCov={avg_path_coverage:.3f}, "
+                    f"VisCov={avg_visible_coverage:.3f}, Avg Steps={avg_steps:.1f}, "
+                    f"SuccessRate={success_rate:.3f}, Max Score={max_score:.3f}, "
+                    f"TotalSteps={total_steps_collected}"
+                )
+            else:
+                print("[EVAL SUMMARY] No completed episodes")
+
+            if csv_file is not None:
+                csv_file.close()
+                print(f"[INFO] Evaluation CSV: {output_csv}")
+            if self.detection_service is not None:
+                try:
+                    self.detection_service.close()
+                except Exception:
+                    pass
+            self.env_collector.close()
+            self.writer.close()
+            print("[INFO] Policy evaluation finished")
+
+        return results
     
     def _perform_update(self):
         """

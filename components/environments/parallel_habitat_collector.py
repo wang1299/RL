@@ -78,6 +78,9 @@ def _worker_loop(
                     
                 elif task[0] == "step":
                     action_id = task[1]
+                    diagnostics = task[2] if len(task) > 2 else None
+                    if diagnostics is not None and hasattr(env, "set_action_diagnostics"):
+                        env.set_action_diagnostics(diagnostics)
                     obs = env.step(action_id)
                     result_queue.put((worker_id, "step_ok", obs))
 
@@ -328,7 +331,7 @@ class ParallelHabitatCollector:
                 continue
             raise RuntimeError(f"Worker {worker_id} reset failed: {result}")
     
-    def step_all(self, actions: List[int]) -> List[Observation]:
+    def step_all(self, actions: List[int], diagnostics: Optional[List[Dict[str, Any]]] = None) -> List[Observation]:
         """
         Step all environments with given actions.
         
@@ -341,9 +344,14 @@ class ParallelHabitatCollector:
         if len(actions) != self.num_workers:
             raise ValueError(f"Expected {self.num_workers} actions, got {len(actions)}")
         
+        if diagnostics is None:
+            diagnostics = [None] * self.num_workers
+        if len(diagnostics) != self.num_workers:
+            raise ValueError(f"Expected {self.num_workers} diagnostics rows, got {len(diagnostics)}")
+
         # Send step tasks to all workers
-        for task_q, action in zip(self.task_queues, actions):
-            task_q.put(("step", action))
+        for task_q, action, diag in zip(self.task_queues, actions, diagnostics):
+            task_q.put(("step", action, diag))
         
         # Collect results
         observations = [None] * self.num_workers

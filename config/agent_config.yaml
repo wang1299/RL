@@ -6,6 +6,8 @@ entropy_coef: 0.01
 num_steps: 4000
 encoder_path: /home/wgy/RL/components/data/model_weights/feature_encoder_15_512_32_512.pth
 action_temperature: 0.5
+rollout_action_mode: argmax_epsilon
+rollout_epsilon: 0.05
 bc_coef: 0.2
 bc_min_coef: 0.05
 bc_coef_decay: true

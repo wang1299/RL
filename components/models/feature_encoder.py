@@ -619,8 +619,9 @@ class SceneGraphLSTMEncoder(nn.Module):
 
 
 class SceneGraphTransformerEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers=2, num_heads=4, dropout=0.1, max_len=4096):
+    def __init__(self, input_dim, hidden_dim, num_layers=2, num_heads=4, dropout=0.1, max_len=4096, causal=True):
         super().__init__()
+        self.causal = bool(causal)
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.pos_encoder = PositionalEncoding(hidden_dim, max_len=max_len)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -629,13 +630,17 @@ class SceneGraphTransformerEncoder(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.output_dim = input_dim
 
+    @staticmethod
+    def _causal_mask(seq_len: int, device):
+        if seq_len <= 1:
+            return None
+        return torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device), diagonal=1)
+
     def forward(self, x_seq, pad_mask=None):
         x_seq = self.input_proj(x_seq)
         x_seq = self.pos_encoder(x_seq)
-        if pad_mask is not None:
-            return self.transformer(x_seq, src_key_padding_mask=pad_mask)
-        else:
-            return self.transformer(x_seq)
+        attn_mask = self._causal_mask(x_seq.size(1), x_seq.device) if self.causal else None
+        return self.transformer(x_seq, mask=attn_mask, src_key_padding_mask=pad_mask)
 
 
 class PositionalEncoding(nn.Module):

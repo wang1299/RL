@@ -267,8 +267,20 @@ def main():
                         help="Disable automatic model checkpoint saving on exit")
     parser.add_argument("--policy_checkpoint_load", type=str, default=None,
                         help="Optional full policy checkpoint to initialize the RL agent, e.g. an HM3D imitation checkpoint")
+    parser.add_argument("--encoder_checkpoint_override", type=str, default=os.environ.get("ENCODER_CHECKPOINT_OVERRIDE"),
+                        help="Optional encoder checkpoint to load after --policy_checkpoint_load. Useful when cached IL features were produced by a different encoder.")
     parser.add_argument("--use_transformer", action="store_true",
                         help="Use the Transformer navigation policy instead of the default LSTM policy")
+    parser.add_argument("--eval_only", action="store_true",
+                        help="Only collect policy evaluation episodes; do not perform RL updates")
+    parser.add_argument("--eval_deterministic", action="store_true",
+                        help="Use argmax actions during --eval_only instead of sampling")
+    parser.add_argument("--eval_output_csv", type=str, default=None,
+                        help="Optional CSV path for per-episode evaluation metrics")
+    parser.add_argument("--eval_no_stop_on_success", action="store_true",
+                        help="During --eval_only, keep running until environment max_actions even after success")
+    parser.add_argument("--transformer_context_len", type=int, default=None,
+                        help="Number of recent online steps to feed to Transformer policy inference")
     
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
@@ -296,11 +308,16 @@ def main():
                 pass
     agent_config["episodes"] = int(args.episodes)
     agent_config["num_steps"] = int(args.num_steps)
+    if args.transformer_context_len is not None:
+        agent_config["transformer_context_len"] = int(args.transformer_context_len)
 
     # This parallel Habitat entrypoint is fixed to REINFORCE, while the
     # recurrent core can be selected explicitly for IL-initialized runs.
     agent_config["name"] = "reinforce"
     navigation_config["use_transformer"] = bool(args.use_transformer)
+    if args.eval_only:
+        agent_config["bc_coef"] = 0.0
+        agent_config["bc_updates_per_rl_update"] = 0
     
     # Set up device
     parsed_gpu_ids = [int(x.strip()) for x in args.gpu_ids.split(",") if x.strip()]
@@ -517,6 +534,14 @@ def main():
                 print(f"[WARNING] Unexpected keys while loading policy checkpoint: {unexpected}")
         else:
             print(f"[WARNING] Policy checkpoint not found: {checkpoint_path}")
+
+    if args.encoder_checkpoint_override:
+        override_path = Path(args.encoder_checkpoint_override).expanduser()
+        if override_path.exists():
+            print(f"[INFO] Overriding encoder weights from {override_path}")
+            agent.load_weights(encoder_path=str(override_path), device=str(device))
+        else:
+            print(f"[WARNING] Encoder override checkpoint not found: {override_path}")
     
     # Multi-GPU setup for RGB encoder
     if torch.cuda.is_available() and len(parsed_gpu_ids) > 1:
@@ -551,14 +576,29 @@ def main():
         runner.total_episodes = args.episodes * len(habitat_scene_ids)
         print(f"[INFO] Total episodes: {runner.total_episodes} ({args.episodes} per scene × {len(habitat_scene_ids)} scenes)")
 
-        # Start training
-        print("[INFO] Starting parallel training...")
-        runner.run()
-        if getattr(runner, "was_interrupted", False) or _SHUTDOWN_REQUESTED:
-            exit_status = "INTERRUPTED"
-            print("[INFO] Training stopped before completion")
+        if args.eval_only:
+            mode = "deterministic/argmax" if args.eval_deterministic else "sampled"
+            print(f"[INFO] Starting policy evaluation only ({mode}); RL updates are disabled")
+            runner.evaluate_policy(
+                deterministic=bool(args.eval_deterministic),
+                output_csv=args.eval_output_csv,
+                random_start=True,
+                stop_on_success=not bool(args.eval_no_stop_on_success),
+            )
+            if getattr(runner, "was_interrupted", False) or _SHUTDOWN_REQUESTED:
+                exit_status = "INTERRUPTED"
+                print("[INFO] Policy evaluation stopped before completion")
+            else:
+                print("[INFO] Policy evaluation completed successfully")
         else:
-            print("[INFO] Training completed successfully")
+            # Start training
+            print("[INFO] Starting parallel training...")
+            runner.run()
+            if getattr(runner, "was_interrupted", False) or _SHUTDOWN_REQUESTED:
+                exit_status = "INTERRUPTED"
+                print("[INFO] Training stopped before completion")
+            else:
+                print("[INFO] Training completed successfully")
     except KeyboardInterrupt:
         exit_status = "INTERRUPTED"
         print("\n[INFO] Training interrupted by user")
@@ -568,7 +608,7 @@ def main():
         import traceback
         traceback.print_exc()
     finally:
-        if not args.no_save_on_exit:
+        if not args.no_save_on_exit and not args.eval_only:
             try:
                 _save_agent_checkpoint(agent, args.save_model_to, run_tag, exit_status)
                 checkpoint_saved = True

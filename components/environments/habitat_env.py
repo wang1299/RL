@@ -200,9 +200,18 @@ class HabitatEnv:
         fill_position_from_gt=False,
         rho=0.1,
         coverage_bonus_scale=2.0,
+        visible_coverage_bonus_scale=0.1,
         discovery_bonus_scale=1.0,
         new_cell_reward=0.0,
         collision_penalty=0.05,
+        no_progress_window=100,
+        no_progress_penalty=0.02,
+        no_progress_min_coverage_delta=1e-4,
+        turn_penalty=0.0003,
+        stationary_turn_window=20,
+        stationary_turn_penalty=0.01,
+        stationary_turn_min_distance=0.02,
+        stationary_turn_termination_window=0,
         dino_max_box_area_ratio=1.0,
         dino_max_box_aspect_ratio=100.0,
         gt_validation_iou_threshold=0.10,
@@ -212,6 +221,10 @@ class HabitatEnv:
         success_reward=10.0,
         reward_allow_semantic_iou_only=False,
         reward_excluded_labels=None,
+        visible_coverage_stride=32,
+        visible_coverage_max_depth=2.0,
+        visible_coverage_min_ray_step=0.25,
+        random_start_yaw_degrees=None,
         max_actions=40,
         save_debug_interval=100,
         save_debug_path=None,
@@ -256,9 +269,18 @@ class HabitatEnv:
         self.navmesh_cell_height = max(float(navmesh_cell_height), 1e-6)
         self.navmesh_cell_size = max(float(navmesh_cell_size), 1e-6)
         self.coverage_bonus_scale = float(coverage_bonus_scale)
+        self.visible_coverage_bonus_scale = float(visible_coverage_bonus_scale)
         self.discovery_bonus_scale = float(discovery_bonus_scale)
         self.new_cell_reward = max(float(new_cell_reward), 0.0)
         self.collision_penalty = max(float(collision_penalty), 0.0)
+        self.no_progress_window = max(int(no_progress_window), 1)
+        self.no_progress_penalty = max(float(no_progress_penalty), 0.0)
+        self.no_progress_min_coverage_delta = max(float(no_progress_min_coverage_delta), 0.0)
+        self.turn_penalty = max(float(turn_penalty), 0.0)
+        self.stationary_turn_window = max(int(stationary_turn_window), 1)
+        self.stationary_turn_penalty = max(float(stationary_turn_penalty), 0.0)
+        self.stationary_turn_min_distance = max(float(stationary_turn_min_distance), 0.0)
+        self.stationary_turn_termination_window = max(int(stationary_turn_termination_window), 0)
         self.dino_max_box_area_ratio = float(dino_max_box_area_ratio)
         if self.dino_max_box_area_ratio <= 0:
             self.dino_max_box_area_ratio = 1.0
@@ -271,11 +293,17 @@ class HabitatEnv:
         self.success_min_coverage = float(success_min_coverage)
         self.success_reward = float(success_reward)
         self.reward_allow_semantic_iou_only = bool(reward_allow_semantic_iou_only)
+        self.visible_coverage_stride = max(int(visible_coverage_stride), 1)
+        self.visible_coverage_max_depth = max(float(visible_coverage_max_depth), 0.1)
+        self.visible_coverage_min_ray_step = max(float(visible_coverage_min_ray_step), 0.05)
+        self.random_start_yaw_degrees = self._parse_yaw_degrees(random_start_yaw_degrees)
         if reward_excluded_labels is None:
             reward_excluded_labels = _DEFAULT_REWARD_EXCLUDED_LABELS
         self.reward_excluded_labels = {str(label) for label in reward_excluded_labels}
         self.save_debug_interval = max(int(save_debug_interval), 1)
         self.total_navigable_cells = None
+        self.coverage_grid = None
+        self.coverage_grid_bounds = None
         self.topdown_base_img = None
         self.topdown_bounds = None
         self.topdown_shape = None
@@ -437,6 +465,8 @@ class HabitatEnv:
         self.scene_reward_gt_ids = self._build_scene_reward_gt_ids()
         self._warn_if_missing_reward_gt()
         self.total_navigable_cells = None
+        self.coverage_grid = None
+        self.coverage_grid_bounds = None
         self.topdown_base_img = None
         self.topdown_bounds = None
         self.topdown_shape = None
@@ -520,6 +550,24 @@ class HabitatEnv:
         # Fallback to random navigable point
         return self._sample_random_start_position()
 
+    def _parse_yaw_degrees(self, yaw_degrees):
+        if yaw_degrees in (None, ""):
+            return None
+        if isinstance(yaw_degrees, str):
+            raw_items = [item.strip() for item in yaw_degrees.split(",") if item.strip()]
+        elif isinstance(yaw_degrees, (list, tuple, np.ndarray)):
+            raw_items = list(yaw_degrees)
+        else:
+            raw_items = [yaw_degrees]
+
+        parsed = []
+        for item in raw_items:
+            try:
+                parsed.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return parsed or None
+
     def reset(self, scene_number=None, random_start=False, start_position=None, start_rotation=None, episode_tag=None):
         current_episode_id = self.episode_id
         self.episode_id += 1
@@ -529,12 +577,19 @@ class HabitatEnv:
         self.discovered_instances = set()
         self.discovered_gt_ids = set()
         self.visited_cells = set()
+        self.visible_cells = set()
         self.traj_pixels.clear()
         self.prev_score = 0.0
         self.prev_coverage = 0.0
+        self.prev_path_coverage = 0.0
+        self.prev_visible_coverage = 0.0
+        self.steps_since_progress = 0
+        self.stationary_turn_steps = 0
         self.prev_agent_position = None
         self.cumulative_reward = 0.0
         self.last_action_name = None
+        self.pending_action_diagnostics = {}
+        self.prev_yaw_deg = None
         self.trajectory_csv = None
         self.traj_pixels_all.clear()
         scene_index = self._resolve_scene_index(scene_number)
@@ -590,7 +645,10 @@ class HabitatEnv:
                 angle = float(start_rotation)
                 agent_state.rotation = quat_from_angle_axis(angle, np.array([0.0, 1.0, 0.0]))
         elif random_start:
-            angle = random.uniform(0, 2 * np.pi)
+            if self.random_start_yaw_degrees:
+                angle = np.radians(random.choice(self.random_start_yaw_degrees))
+            else:
+                angle = random.uniform(0, 2 * np.pi)
             agent_state.rotation = quat_from_angle_axis(angle, np.array([0.0, 1.0, 0.0]))
 
         agent.set_state(agent_state)
@@ -606,9 +664,38 @@ class HabitatEnv:
             os.makedirs(self.current_ep_dir, exist_ok=True)
             with open(self.trajectory_csv, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["step", "x", "y", "z", "yaw_deg", "score", "coverage", "num_discovered_gt", "num_instances"])
+                writer.writerow([
+                    "step",
+                    "x",
+                    "y",
+                    "z",
+                    "yaw_deg",
+                    "score",
+                    "coverage",
+                    "path_coverage",
+                    "visible_coverage",
+                    "num_discovered_gt",
+                    "num_instances",
+                    "action",
+                    "policy_action",
+                    "action_overridden",
+                    "forward_escape_cooldown",
+                    "forward_heading_blocked",
+                    "turn_loop_count",
+                    "no_move_count",
+                    "last_action",
+                    "prob_left",
+                    "prob_right",
+                    "prob_forward",
+                    "entropy",
+                    "moved_distance",
+                    "yaw_delta",
+                ])
 
         return self._process_obs(obs, is_reset=True)
+
+    def set_action_diagnostics(self, diagnostics):
+        self.pending_action_diagnostics = dict(diagnostics or {})
 
     def step(self, action_id):
         self.step_count += 1
@@ -764,16 +851,28 @@ class HabitatEnv:
             except Exception as e:
                 print(f"Failed to save viz frame: {e}")
 
-        # Track trajectory and occupancy-like coverage from visited world cells.
+        # Track path coverage from visited world cells and visual coverage from
+        # depth-projected visible navigable cells. The public "coverage" metric
+        # is their union, so looking into a new area counts even before the
+        # agent body reaches that cell.
         ax = float(agent_state.position[0])
         ay = float(agent_state.position[1])
         az = float(agent_state.position[2])
-        cell = self._quantize_world_cell(ax, az)
-        is_new_cell = cell not in self.visited_cells
-        self.visited_cells.add(cell)
+        cell = self._world_to_coverage_cell(ax, az)
+        is_new_cell = cell is not None and cell not in self.visited_cells
+        if cell is not None:
+            self.visited_cells.add(cell)
+        visible_step_cells = self._visible_cells_from_depth(depth, agent_state)
+        if visible_step_cells:
+            self.visible_cells.update(visible_step_cells)
         denom = max(self.total_navigable_cells or 1, 1)
-        coverage = min(len(self.visited_cells) / denom, 1.0)
+        path_coverage = min(len(self.visited_cells) / denom, 1.0)
+        visible_coverage = min(len(self.visible_cells) / denom, 1.0)
+        coverage_cells = self.visited_cells | self.visible_cells
+        coverage = min(len(coverage_cells) / denom, 1.0)
         coverage_delta = coverage - self.prev_coverage
+        path_coverage_delta = path_coverage - getattr(self, "prev_path_coverage", 0.0)
+        visible_coverage_delta = visible_coverage - getattr(self, "prev_visible_coverage", 0.0)
 
         moved_distance = 0.0
         if self.prev_agent_position is not None:
@@ -800,11 +899,22 @@ class HabitatEnv:
 
         if is_reset:
             reward = 0.0
+            self.steps_since_progress = 0
         else:
             score_gain = current_score - self.prev_score
+            has_progress = (
+                score_gain > 0.0
+                or path_coverage_delta > self.no_progress_min_coverage_delta
+            )
+            if has_progress:
+                self.steps_since_progress = 0
+            else:
+                self.steps_since_progress = int(getattr(self, "steps_since_progress", 0)) + 1
+
             reward = (
                 self.discovery_bonus_scale * score_gain
-                + self.coverage_bonus_scale * coverage_delta
+                + self.coverage_bonus_scale * max(path_coverage_delta, 0.0)
+                + self.visible_coverage_bonus_scale * max(visible_coverage_delta, 0.0)
                 + (self.new_cell_reward if is_new_cell else 0.0)
                 - self.rho
             )
@@ -814,11 +924,34 @@ class HabitatEnv:
             # If the agent tried to go forward but barely moved, treat it as a collision/blocked step.
             if getattr(self, "last_action_name", None) == "move_forward" and moved_distance < 0.03:
                 reward -= self.collision_penalty
+            if getattr(self, "last_action_name", None) in {"turn_left", "turn_right"}:
+                reward -= self.turn_penalty
+                if moved_distance <= self.stationary_turn_min_distance:
+                    self.stationary_turn_steps = int(getattr(self, "stationary_turn_steps", 0)) + 1
+                else:
+                    self.stationary_turn_steps = 0
+                if self.stationary_turn_steps >= self.stationary_turn_window:
+                    reward -= self.stationary_turn_penalty
+            else:
+                self.stationary_turn_steps = 0
+            if self.steps_since_progress >= self.no_progress_window:
+                reward -= self.no_progress_penalty
 
         self.prev_score = current_score
         self.prev_coverage = coverage
+        self.prev_path_coverage = path_coverage
+        self.prev_visible_coverage = visible_coverage
+        if (
+            self.stationary_turn_termination_window > 0
+            and getattr(self, "stationary_turn_steps", 0) >= self.stationary_turn_termination_window
+        ):
+            truncated = True
 
         yaw_deg = float(self._yaw_from_quat(agent_state.rotation))
+        yaw_delta = 0.0
+        if self.prev_yaw_deg is not None:
+            yaw_delta = float((yaw_deg - float(self.prev_yaw_deg) + 180.0) % 360.0 - 180.0)
+        self.prev_yaw_deg = yaw_deg
         if self.topdown_base_img is not None:
             px = self._world_to_topdown_px(ax, az)
             if px is not None:
@@ -834,7 +967,34 @@ class HabitatEnv:
             with open(self.trajectory_csv, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if write_header:
-                    writer.writerow(["step", "x", "y", "z", "yaw_deg", "score", "coverage", "num_discovered_gt", "num_instances"])
+                    writer.writerow([
+                        "step",
+                        "x",
+                        "y",
+                        "z",
+                        "yaw_deg",
+                        "score",
+                        "coverage",
+                        "path_coverage",
+                        "visible_coverage",
+                        "num_discovered_gt",
+                        "num_instances",
+                        "action",
+                        "policy_action",
+                        "action_overridden",
+                        "forward_escape_cooldown",
+                        "forward_heading_blocked",
+                        "turn_loop_count",
+                        "no_move_count",
+                        "last_action",
+                        "prob_left",
+                        "prob_right",
+                        "prob_forward",
+                        "entropy",
+                        "moved_distance",
+                        "yaw_delta",
+                    ])
+                diag = getattr(self, "pending_action_diagnostics", {}) or {}
                 writer.writerow([
                     int(self.step_count),
                     round(ax, 4),
@@ -843,8 +1003,24 @@ class HabitatEnv:
                     round(yaw_deg, 2),
                     round(float(current_score), 6),
                     round(float(coverage), 6),
+                    round(float(path_coverage), 6),
+                    round(float(visible_coverage), 6),
                     int(discovered_gt_count),
                     int(discovered_instance_count),
+                    diag.get("action", ""),
+                    diag.get("policy_action", ""),
+                    diag.get("action_overridden", ""),
+                    diag.get("forward_escape_cooldown", ""),
+                    diag.get("forward_heading_blocked", ""),
+                    diag.get("turn_loop_count", ""),
+                    diag.get("no_move_count", ""),
+                    diag.get("last_action", ""),
+                    round(float(diag.get("prob_left", 0.0)), 6) if diag else "",
+                    round(float(diag.get("prob_right", 0.0)), 6) if diag else "",
+                    round(float(diag.get("prob_forward", 0.0)), 6) if diag else "",
+                    round(float(diag.get("entropy", 0.0)), 6) if diag else "",
+                    round(float(moved_distance), 6),
+                    round(float(yaw_delta), 6),
                 ])
 
         if (terminated or truncated) and self.current_ep_dir is not None:
@@ -859,12 +1035,23 @@ class HabitatEnv:
                 "score": float(current_score),
                 "object_recall": float(current_score),
                 "coverage_delta": float(coverage_delta),
+                "path_coverage_delta": float(path_coverage_delta),
+                "visible_coverage_delta": float(visible_coverage_delta),
                 "num_discovered": discovered_gt_count,
                 "num_discovered_gt": discovered_gt_count,
                 "num_discovered_labels": discovered_label_count,
                 "num_discovered_instances": discovered_instance_count,
                 "coverage": float(coverage),
+                "path_coverage": float(path_coverage),
+                "visible_coverage": float(visible_coverage),
+                "yaw_deg": float(yaw_deg),
+                "yaw_delta": float(yaw_delta),
+                "moved_distance": float(moved_distance),
                 "visited_cells": len(self.visited_cells),
+                "visible_cells": len(self.visible_cells),
+                "coverage_cells": len(coverage_cells),
+                "steps_since_progress": int(getattr(self, "steps_since_progress", 0)),
+                "stationary_turn_steps": int(getattr(self, "stationary_turn_steps", 0)),
                 "total_navigable_cells": int(denom),
                 "agent_pos": (ax, az),
                 "scene_reward_gt_ids": sorted(int(item) for item in getattr(self, "scene_reward_gt_ids", set())),
@@ -1010,11 +1197,16 @@ class HabitatEnv:
             "rotation": agent_state.rotation,
             "step_count": int(getattr(self, "step_count", 0)),
             "visited_cells": set(getattr(self, "visited_cells", set())),
+            "visible_cells": set(getattr(self, "visible_cells", set())),
             "discovered_objects": set(getattr(self, "discovered_objects", set())),
             "discovered_instances": set(getattr(self, "discovered_instances", set())),
             "discovered_gt_ids": set(getattr(self, "discovered_gt_ids", set())),
             "prev_score": float(getattr(self, "prev_score", 0.0)),
             "prev_coverage": float(getattr(self, "prev_coverage", 0.0)),
+            "prev_path_coverage": float(getattr(self, "prev_path_coverage", 0.0)),
+            "prev_visible_coverage": float(getattr(self, "prev_visible_coverage", 0.0)),
+            "steps_since_progress": int(getattr(self, "steps_since_progress", 0)),
+            "stationary_turn_steps": int(getattr(self, "stationary_turn_steps", 0)),
             "prev_agent_position": (
                 None
                 if getattr(self, "prev_agent_position", None) is None
@@ -1034,22 +1226,32 @@ class HabitatEnv:
         agent.set_state(agent_state)
         self.step_count = int(snapshot.get("step_count", getattr(self, "step_count", 0)))
         self.visited_cells = set(snapshot.get("visited_cells", set()))
+        self.visible_cells = set(snapshot.get("visible_cells", set()))
         self.discovered_objects = set(snapshot.get("discovered_objects", set()))
         self.discovered_instances = set(snapshot.get("discovered_instances", set()))
         self.discovered_gt_ids = set(snapshot.get("discovered_gt_ids", set()))
         self.prev_score = float(snapshot.get("prev_score", 0.0))
         self.prev_coverage = float(snapshot.get("prev_coverage", 0.0))
+        self.prev_path_coverage = float(snapshot.get("prev_path_coverage", 0.0))
+        self.prev_visible_coverage = float(snapshot.get("prev_visible_coverage", 0.0))
+        self.steps_since_progress = int(snapshot.get("steps_since_progress", 0))
+        self.stationary_turn_steps = int(snapshot.get("stationary_turn_steps", 0))
         self.prev_agent_position = snapshot.get("prev_agent_position")
         self.last_action_name = snapshot.get("last_action_name")
         obs = self.sim.get_sensor_observations()
         self._process_obs(obs, is_reset=True)
         self.step_count = int(snapshot.get("step_count", getattr(self, "step_count", 0)))
         self.visited_cells = set(snapshot.get("visited_cells", set()))
+        self.visible_cells = set(snapshot.get("visible_cells", set()))
         self.discovered_objects = set(snapshot.get("discovered_objects", set()))
         self.discovered_instances = set(snapshot.get("discovered_instances", set()))
         self.discovered_gt_ids = set(snapshot.get("discovered_gt_ids", set()))
         self.prev_score = float(snapshot.get("prev_score", self.prev_score))
         self.prev_coverage = float(snapshot.get("prev_coverage", self.prev_coverage))
+        self.prev_path_coverage = float(snapshot.get("prev_path_coverage", self.prev_path_coverage))
+        self.prev_visible_coverage = float(snapshot.get("prev_visible_coverage", self.prev_visible_coverage))
+        self.steps_since_progress = int(snapshot.get("steps_since_progress", self.steps_since_progress))
+        self.stationary_turn_steps = int(snapshot.get("stationary_turn_steps", self.stationary_turn_steps))
         self.prev_agent_position = snapshot.get("prev_agent_position")
         self.last_action_name = snapshot.get("last_action_name")
 
@@ -1412,11 +1614,129 @@ class HabitatEnv:
         qz = round(float(z) / self.coverage_cell_size) * self.coverage_cell_size
         return (round(qx, 3), round(qz, 3))
 
+    def _world_to_coverage_cell(self, x, z):
+        if self.coverage_grid is None or self.coverage_grid_bounds is None:
+            return self._quantize_world_cell(x, z)
+
+        min_b, max_b = self.coverage_grid_bounds
+        min_x, max_x = float(min_b[0]), float(max_b[0])
+        min_z, max_z = float(min_b[2]), float(max_b[2])
+        if max_x <= min_x or max_z <= min_z:
+            return None
+
+        grid_h, grid_w = self.coverage_grid.shape[:2]
+        col = int(np.floor((float(x) - min_x) / max(self.coverage_cell_size, 1e-6)))
+        row = int(np.floor((float(z) - min_z) / max(self.coverage_cell_size, 1e-6)))
+        if row < 0 or row >= grid_h or col < 0 or col >= grid_w:
+            return None
+        if not bool(self.coverage_grid[row, col]):
+            return None
+        return (int(row), int(col))
+
+    def _visible_cells_from_depth(self, depth, agent_state):
+        if depth is None or agent_state is None:
+            return set()
+        if self.coverage_grid is None or self.coverage_grid_bounds is None:
+            return set()
+
+        depth_arr = np.asarray(depth)
+        if depth_arr.ndim == 3 and depth_arr.shape[-1] == 1:
+            depth_arr = depth_arr[:, :, 0]
+        if depth_arr.ndim != 2:
+            return set()
+
+        height, width = depth_arr.shape[:2]
+        if height <= 0 or width <= 0:
+            return set()
+
+        stride = max(int(getattr(self, "visible_coverage_stride", 32)), 1)
+        hfov = float(getattr(self, "_camera_hfov_deg", 90.0))
+        fx = (width / 2.0) / np.tan(np.deg2rad(hfov / 2.0))
+        fy = (height / 2.0) / np.tan(np.deg2rad(hfov / 2.0))
+        cx = width / 2.0
+        cy = height / 2.0
+
+        sensor_state = getattr(agent_state, "sensor_states", {}).get("depth_sensor")
+        pose_state = sensor_state if sensor_state is not None else agent_state
+        camera_pos = np.array(
+            [
+                float(pose_state.position[0]),
+                float(pose_state.position[1]),
+                float(pose_state.position[2]),
+            ],
+            dtype=np.float32,
+        )
+        q = pose_state.rotation
+        quat = np.array([float(q.x), float(q.y), float(q.z), float(q.w)], dtype=np.float32)
+        inv_quat = np.array([-quat[0], -quat[1], -quat[2], quat[3]], dtype=np.float32)
+        max_depth = float(getattr(self, "visible_coverage_max_depth", 8.0))
+        depth_margin = max(float(getattr(self, "coverage_cell_size", 0.25)), 0.15)
+        floor_y = float(agent_state.position[1]) + 0.05
+
+        min_b, _ = self.coverage_grid_bounds
+        min_x, min_z = float(min_b[0]), float(min_b[2])
+        grid_h, grid_w = self.coverage_grid.shape[:2]
+        cell_size = max(float(getattr(self, "coverage_cell_size", 0.25)), 1e-6)
+        min_col = max(int(np.floor((camera_pos[0] - max_depth - min_x) / cell_size)), 0)
+        max_col = min(int(np.ceil((camera_pos[0] + max_depth - min_x) / cell_size)), grid_w - 1)
+        min_row = max(int(np.floor((camera_pos[2] - max_depth - min_z) / cell_size)), 0)
+        max_row = min(int(np.ceil((camera_pos[2] + max_depth - min_z) / cell_size)), grid_h - 1)
+
+        cells = set()
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                if not bool(self.coverage_grid[row, col]):
+                    continue
+                x = min_x + (col + 0.5) * cell_size
+                z = min_z + (row + 0.5) * cell_size
+                world_point = np.array([x, floor_y, z], dtype=np.float32)
+                rel_world = world_point - camera_pos
+                if not np.all(np.isfinite(rel_world)):
+                    continue
+                cam_point = self._quat_rotate_vec(inv_quat, rel_world)
+                z_cam = float(cam_point[2])
+                if z_cam <= 0.05 or z_cam > max_depth:
+                    continue
+
+                u = fx * float(cam_point[0]) / z_cam + cx
+                v = cy - fy * float(cam_point[1]) / z_cam
+                if u < 0 or u >= width or v < 0 or v >= height:
+                    continue
+
+                u0 = int(np.clip(round(u), 0, width - 1))
+                v0 = int(np.clip(round(v), 0, height - 1))
+                observed_depth = float(depth_arr[v0, u0])
+                if not np.isfinite(observed_depth) or observed_depth <= 0.05:
+                    continue
+                if observed_depth + depth_margin < z_cam:
+                    continue
+                cells.add((int(row), int(col)))
+
+        return cells
+
     def _estimate_navigable_cells(self):
+        if self.sim.pathfinder.is_loaded:
+            try:
+                grid = np.asarray(
+                    self.sim.pathfinder.get_topdown_view(
+                        meters_per_pixel=self.coverage_cell_size,
+                        height=0.15,
+                    ),
+                    dtype=bool,
+                )
+                if grid.size > 0:
+                    self.coverage_grid = grid
+                    self.coverage_grid_bounds = self.sim.pathfinder.get_bounds()
+                    return max(int(grid.sum()), 1)
+            except Exception as e:
+                print(f"Failed to estimate coverage grid from topdown navmesh: {e}")
+
         points = set()
         for _ in range(self.nav_sample_points):
             p = self.sim.pathfinder.get_random_navigable_point()
             points.add(self._quantize_world_cell(float(p[0]), float(p[2])))
+        self.coverage_grid = None
+        self.coverage_grid_bounds = None
         return max(len(points), 1)
 
     def _yaw_from_quat(self, q):

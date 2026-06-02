@@ -218,6 +218,13 @@ venv.bak/
 .ropeproject
 
 # mkdocs documentation
+
+# RL runtime artifacts
+eval_log/
+eval_png/
+eval_results/
+train_log/
+train_png/
 /site
 
 # mypy
