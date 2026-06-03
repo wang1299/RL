@@ -3,14 +3,14 @@ import os
 from PIL import Image
 
 # 确保能找到项目根目录
-sys.path.append("/home/wgy/RL")
+sys.path.append("/root/RL")
 
 from components.environments.thor_env import ThorEnv
 from components.detectors.grounding_dino_adapter import GroundingDINODetector
 
 def main():
     # 1. 配置 Grounding DINO 路径
-    dino_root = "/home/wgy/GroundingDINO"
+    dino_root = "/root/GroundingDINO"
     config_file = os.path.join(dino_root, "groundingdino/config/GroundingDINO_SwinT_OGC.py")
     checkpoint_file = os.path.join(dino_root, "weights/groundingdino_swint_ogc.pth")
     

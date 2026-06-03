@@ -5,10 +5,10 @@ import numpy as np
 
 sys.path.append(os.getcwd())
 # Ensure components can be imported
-sys.path.append("/home/wgy/RL")
+sys.path.append("/root/RL")
 
 def check_depth():
-    pkl_path = "/home/wgy/RL/components/data/il_dataset/FloorPlan1/FloorPlan1_px_-0.75_pz_-1.5_ry_270.0.pkl"
+    pkl_path = "/root/RL/components/data/il_dataset/FloorPlan1/FloorPlan1_px_-0.75_pz_-1.5_ry_270.0.pkl"
     try:
         with open(pkl_path, 'rb') as f:
             data = pickle.load(f)

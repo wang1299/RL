@@ -9,16 +9,16 @@ The legacy AI2-THOR, A2C, Transformer, imitation-learning, and precomputed-envir
 | Component | Current implementation |
 | --- | --- |
 | Simulator | Habitat / habitat-sim |
-| Dataset | HM3D, loaded from `/home/wgy/hm3d/scene_datasets/hm3d` |
+| Dataset | HM3D, loaded from `/root/hm3d/scene_datasets/hm3d` |
 | Training strategy | REINFORCE + LSTM |
 | Parallelism | Multiple Habitat worker processes plus batched policy inference |
 | Detector | GroundingDINO |
 | Conda environment | `habitat` |
-| Main script | `/home/wgy/RL/run_train_parallel.sh` |
-| Python entrypoint | `/home/wgy/RL/train_habitat_parallel.py` |
-| Logs | `/home/wgy/RL/train_log/parallel_train_*.log` |
-| Visualizations | `/home/wgy/RL/train_png/parallel_train_*` |
-| TensorBoard | `/home/wgy/RL/RL_training/runs` |
+| Main script | `/root/RL/run_train_parallel.sh` |
+| Python entrypoint | `/root/RL/train_habitat_parallel.py` |
+| Logs | `/root/RL/train_log/parallel_train_*.log` |
+| Visualizations | `/root/RL/train_png/parallel_train_*` |
+| TensorBoard | `/root/RL/RL_training/runs` |
 
 ## What Was Modified
 
@@ -39,29 +39,29 @@ The project has been changed from the original AI2-THOR-oriented workflow to a H
 Use the shell script:
 
 ```bash
-cd /home/wgy/RL
+cd /root/RL
 conda activate habitat
-bash /home/wgy/RL/run_train_parallel.sh
+bash /root/RL/run_train_parallel.sh
 ```
 
 The script starts training with `nohup`, creates a timestamped experiment name, and writes:
 
-- log file: `/home/wgy/RL/train_log/parallel_train_<timestamp>.log`
-- visualization folder: `/home/wgy/RL/train_png/parallel_train_<timestamp>/`
-- PID file: `/home/wgy/RL/train_png/parallel_train_<timestamp>/training.pid`
+- log file: `/root/RL/train_log/parallel_train_<timestamp>.log`
+- visualization folder: `/root/RL/train_png/parallel_train_<timestamp>/`
+- PID file: `/root/RL/train_png/parallel_train_<timestamp>/training.pid`
 
 `run_train_parallel.sh` directly invokes `/root/miniconda3/envs/habitat/bin/python`, so it is tied to the `habitat` conda environment even when launched through `nohup`.
 
 To monitor the latest log:
 
 ```bash
-tail -f $(ls -t /home/wgy/RL/train_log/parallel_train_*.log | head -1)
+tail -f $(ls -t /root/RL/train_log/parallel_train_*.log | head -1)
 ```
 
 To stop a run:
 
 ```bash
-kill $(cat /home/wgy/RL/train_png/parallel_train_<timestamp>/training.pid)
+kill $(cat /root/RL/train_png/parallel_train_<timestamp>/training.pid)
 ```
 
 ## Default Parallel Configuration
@@ -141,7 +141,7 @@ once before epoch 2 starts at scene 1 again.
 Each worker writes visualization files under:
 
 ```text
-/home/wgy/RL/train_png/parallel_train_<timestamp>/worker_<id>/
+/root/RL/train_png/parallel_train_<timestamp>/worker_<id>/
 ```
 
 Typical per-episode outputs include:
@@ -181,7 +181,7 @@ GroundingDINO detections are validated against Habitat semantic observations bef
 Training also writes TensorBoard summaries:
 
 ```bash
-tensorboard --logdir /home/wgy/RL/RL_training/runs
+tensorboard --logdir /root/RL/RL_training/runs
 ```
 
 Useful scalar groups include per-worker reward/score and aggregate training statistics.
@@ -194,14 +194,14 @@ Common issues:
 - `Worker timeout`: Habitat initialization or stepping is slow. Reduce worker count, check HM3D scene integrity, and inspect the training log for worker errors.
 - `ModuleNotFoundError: habitat_sim`: activate the `habitat` conda environment and confirm Habitat/Habitat-Sim are installed there.
 - Low GPU utilization: increase worker count only if CPU/memory capacity allows; otherwise the environment side may already be saturated.
-- DINO weights missing: verify `/home/wgy/GroundingDINO/weights/groundingdino_swint_ogc.pth`.
+- DINO weights missing: verify `/root/GroundingDINO/weights/groundingdino_swint_ogc.pth`.
 
 Useful monitoring commands:
 
 ```bash
-tail -f $(ls -t /home/wgy/RL/train_log/parallel_train_*.log | head -1)
+tail -f $(ls -t /root/RL/train_log/parallel_train_*.log | head -1)
 watch -n 1 nvidia-smi
-tensorboard --logdir /home/wgy/RL/RL_training/runs
+tensorboard --logdir /root/RL/RL_training/runs
 ```
 
 ## Deprecated Docs Merged
@@ -224,7 +224,7 @@ The requested changes are in place:
 | Use LSTM + REINFORCE | Done | `train_habitat_parallel.py`, `config/agent_config.yaml`, `config/navigation_config.yaml` |
 | Use parallel training | Done | `components/environments/parallel_habitat_collector.py`, `RL_training/runner/parallel_habitat_rl_train_runner.py` |
 | Use GroundingDINO detector | Done | `components/detectors/grounding_dino_service.py`, `train_habitat_parallel.py` |
-| Main script is `/home/wgy/RL/run_train_parallel.sh` | Done | `run_train_parallel.sh` |
+| Main script is `/root/RL/run_train_parallel.sh` | Done | `run_train_parallel.sh` |
 | Save training logs | Done | `run_train_parallel.sh` writes `train_log/parallel_train_*.log` |
 | Save training visualizations | Done | `run_train_parallel.sh` writes `train_png/parallel_train_*` |
 | Save fixed-step detection images | Done | `HabitatEnv._save_dino_validation_overlay()` writes `dino_validation_XXXX.png` |

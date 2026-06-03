@@ -1,4 +1,4 @@
-with open('/home/wgy/RL/components/environments/habitat_env.py', 'r') as f:
+with open('/root/RL/components/environments/habitat_env.py', 'r') as f:
     lines = f.read()
 
 # Add discovered_objects reset
@@ -59,6 +59,6 @@ if start_idx != -1 and end_idx != -1:
 else:
     print("Could not find _process_obs block")
 
-with open('/home/wgy/RL/components/environments/habitat_env.py', 'w') as f:
+with open('/root/RL/components/environments/habitat_env.py', 'w') as f:
     f.write(lines)
 print("Finished adding score to HabitatEnv")

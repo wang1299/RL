@@ -15,7 +15,7 @@ try:
     from components.detectors.grounding_dino_adapter import GroundingDINODetector
 except ImportError as e:
     print(f"Error importing components: {e}")
-    print("Please run this script from the project root (e.g. /home/wgy/RL)")
+    print("Please run this script from the project root (e.g. /root/RL)")
     sys.exit(1)
 
 def load_objects_prompt(json_path):
@@ -153,17 +153,17 @@ def main():
     # 1. Select a sample file from the dataset
     pkl_file = "components/data/il_dataset/FloorPlan1/FloorPlan1_px_-0.75_pz_-1.5_ry_270.0.pkl"
     # Use absolute path just in case
-    pkl_path = os.path.join("/home/wgy/RL", pkl_file)
+    pkl_path = os.path.join("/root/RL", pkl_file)
     
     # 2. DINO Config (Assuming default paths from your project structure)
-    grounding_dino_root = "/home/wgy/GroundingDINO"
+    grounding_dino_root = "/root/GroundingDINO"
     
     config_path = os.path.join(grounding_dino_root, "groundingdino/config/GroundingDINO_SwinT_OGC.py")
     checkpoint_path = os.path.join(grounding_dino_root, "weights/groundingdino_swint_ogc.pth")
     
     # 3. Prompts
     # Load from object_types.json
-    object_types_path = "/home/wgy/RL/components/data/scene_graph_mappings/default/object_types.json"
+    object_types_path = "/root/RL/components/data/scene_graph_mappings/default/object_types.json"
     full_prompt = load_objects_prompt(object_types_path)
     
     if full_prompt:

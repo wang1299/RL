@@ -2,25 +2,25 @@
 
 set -euo pipefail
 
-mkdir -p /home/wgy/RL/train_log
+mkdir -p /root/RL/train_log
 
 export HF_ENDPOINT=https://hf-mirror.com
-export PYTHONPATH=${PYTHONPATH:-}:/home/wgy/RL:/home/wgy/GroundingDINO
+export PYTHONPATH=${PYTHONPATH:-}:/root/RL:/root/GroundingDINO
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Use one physical GPU for dataset generation and imitation training by default.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4}"
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-DATA_DIR="${HM3D_IL_DATA_DIR:-/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_${TIMESTAMP}}"
-WEIGHT_DIR="${HM3D_IL_WEIGHT_DIR:-/home/wgy/RL/components/data/model_weights/hm3d_viewpoint_imitation_poi2yaw_${TIMESTAMP}}"
-GEN_LOG="/home/wgy/RL/train_log/hm3d_il_generate_${TIMESTAMP}.log"
-TRAIN_LOG="/home/wgy/RL/train_log/hm3d_il_train_${TIMESTAMP}.log"
+DATA_DIR="${HM3D_IL_DATA_DIR:-/root/RL/components/data/hm3d_viewpoint_il_dataset_poi2yaw_${TIMESTAMP}}"
+WEIGHT_DIR="${HM3D_IL_WEIGHT_DIR:-/root/RL/components/data/model_weights/hm3d_viewpoint_imitation_poi2yaw_${TIMESTAMP}}"
+GEN_LOG="/root/RL/train_log/hm3d_il_generate_${TIMESTAMP}.log"
+TRAIN_LOG="/root/RL/train_log/hm3d_il_train_${TIMESTAMP}.log"
 
 mkdir -p "$DATA_DIR"
 mkdir -p "$WEIGHT_DIR"
 
-GENERATOR_SCRIPT="${HM3D_IL_GENERATOR_SCRIPT:-/home/wgy/RL/ImitationLearning/scripts/generate_hm3d_viewpoint_expert_dataset.py}"
+GENERATOR_SCRIPT="${HM3D_IL_GENERATOR_SCRIPT:-/root/RL/ImitationLearning/scripts/generate_hm3d_viewpoint_expert_dataset.py}"
 EPISODES_PER_SCENE="${EPISODES_PER_SCENE:-8}"
 MAX_STEPS="${MAX_STEPS:-900}"
 IL_EPOCHS="${IL_EPOCHS:-30}"
@@ -53,8 +53,8 @@ echo "[INFO] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "[INFO] Generation log: $GEN_LOG"
 
 /root/miniconda3/envs/habitat/bin/python "$GENERATOR_SCRIPT" \
-    --conf_path /home/wgy/RL/config \
-    --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
+    --conf_path /root/RL/config \
+    --dataset_root /root/hm3d/scene_datasets/hm3d \
     --output_dir "$DATA_DIR" \
     --episodes_per_scene "$EPISODES_PER_SCENE" \
     --max_steps "$MAX_STEPS" \
@@ -86,8 +86,8 @@ if [[ "$IL_FREEZE_ENCODER" == "1" || "$IL_FREEZE_ENCODER" == "true" || "$IL_FREE
     FREEZE_ENCODER_ARGS=(--freeze_encoder)
 fi
 
-/root/miniconda3/envs/habitat/bin/python /home/wgy/RL/ImitationLearning/train_hm3d_il.py \
-    --conf_path /home/wgy/RL/config \
+/root/miniconda3/envs/habitat/bin/python /root/RL/ImitationLearning/train_hm3d_il.py \
+    --conf_path /root/RL/config \
     --data_dir "$DATA_DIR" \
     --save_dir "$WEIGHT_DIR" \
     --epochs "$IL_EPOCHS" \
@@ -107,4 +107,4 @@ echo "[INFO] Best-loss checkpoint: $WEIGHT_DIR/hm3d_imitation_best_loss.pth"
 echo "[INFO] Best-top1 checkpoint: $WEIGHT_DIR/hm3d_imitation_best_top1.pth"
 echo "[INFO] Best-balanced checkpoint: $WEIGHT_DIR/hm3d_imitation_best_balanced.pth"
 echo "[INFO] Start RL with:"
-echo "POLICY_CHECKPOINT_LOAD=$WEIGHT_DIR/hm3d_imitation_best_loss.pth /home/wgy/RL/run_train_parallel.sh"
+echo "POLICY_CHECKPOINT_LOAD=$WEIGHT_DIR/hm3d_imitation_best_loss.pth /root/RL/run_train_parallel.sh"

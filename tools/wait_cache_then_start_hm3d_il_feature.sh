@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 TS="${1:-$(date +%Y%m%d_%H%M%S)}"
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 
 DATA_DIR="${HM3D_IL_DATA_DIR:-$ROOT/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50}"
 FEATURE_DIR="${HM3D_IL_FEATURE_DIR:-$ROOT/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50_features}"

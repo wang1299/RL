@@ -6,7 +6,7 @@ import numpy as np
 sys.path.append(os.getcwd())
 
 def check_transition_table():
-    pkl_path = "/home/wgy/RL/components/data/transition_tables/FloorPlan1.pkl"
+    pkl_path = "/root/RL/components/data/transition_tables/FloorPlan1.pkl"
     if not os.path.exists(pkl_path):
         print(f"File {pkl_path} not found.")
         return

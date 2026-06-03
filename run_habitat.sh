@@ -1,11 +1,11 @@
 #!/bin/bash
 export HF_ENDPOINT=https://hf-mirror.com
-export PYTHONPATH=$PYTHONPATH:/home/wgy/RL:/home/wgy/GroundingDINO
+export PYTHONPATH=$PYTHONPATH:/root/RL:/root/GroundingDINO
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 EXP_NAME="train_habitat_${TIMESTAMP}"
-LOG_FILE="/home/wgy/RL/train_log/${EXP_NAME}.log"
-VIZ_DIR="/home/wgy/RL/train_png/${EXP_NAME}"
+LOG_FILE="/root/RL/train_log/${EXP_NAME}.log"
+VIZ_DIR="/root/RL/train_png/${EXP_NAME}"
 
 mkdir -p "$VIZ_DIR"
 

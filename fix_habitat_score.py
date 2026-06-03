@@ -1,4 +1,4 @@
-with open('/home/wgy/RL/components/environments/habitat_env.py', 'r') as f:
+with open('/root/RL/components/environments/habitat_env.py', 'r') as f:
     lines = f.read()
 
 new_process_obs = '''    def _process_obs(self, obs, is_reset=False):
@@ -50,6 +50,6 @@ end_idx = lines.find('    def get_actions(self):')
 if start_idx != -1 and end_idx != -1:
     lines = lines[:start_idx] + new_process_obs + "\n\n" + lines[end_idx:]
 
-with open('/home/wgy/RL/components/environments/habitat_env.py', 'w') as f:
+with open('/root/RL/components/environments/habitat_env.py', 'w') as f:
     f.write(lines)
 print("done")

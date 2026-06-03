@@ -18,8 +18,8 @@ def test_basic_reset_step():
     print("[TEST] Starting ParallelHabitatCollector test...")
     
     # Check if Habitat dataset exists
-    dataset_root = "/home/wgy/data/versioned_data/hssd-hab"
-    config_file = "/home/wgy/data/versioned_data/hssd-hab/hssd_hab.yaml"
+    dataset_root = "/root/data/versioned_data/hssd-hab"
+    config_file = "/root/data/versioned_data/hssd-hab/hssd_hab.yaml"
     
     if not os.path.exists(dataset_root):
         print(f"[WARNING] Dataset root not found: {dataset_root}")

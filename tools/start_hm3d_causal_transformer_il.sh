@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 TIMESTAMP="${1:-$(date +"%Y%m%d_%H%M%S")}"
 
 FEATURE_DIR="${HM3D_IL_FEATURE_DIR:-$ROOT/components/data/hm3d_viewpoint_il_dataset_poi4yaw_geometric_20260524_172033_features}"

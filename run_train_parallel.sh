@@ -4,30 +4,29 @@
 # Mirrors the configuration from run_train.sh but uses parallel environment sampling
 
 # Create output directories
-mkdir -p /home/wgy/RL/train_log
-mkdir -p /home/wgy/RL/train_png
+mkdir -p /root/RL/train_log
+mkdir -p /root/RL/train_png
 
 # Set environment variables (same as run_train.sh)
 export HF_ENDPOINT=https://hf-mirror.com
-export PYTHONPATH=$PYTHONPATH:$(pwd):/home/wgy/GroundingDINO
+export PYTHONPATH=$PYTHONPATH:$(pwd):/root/GroundingDINO
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONUNBUFFERED=1
 
-# Use physical GPUs 4,5,6,7 by masking visible devices to that set.
-# Inside the process, these map to logical CUDA devices 0,1,2,3.
-export CUDA_VISIBLE_DEVICES="4,5,6,7"
-export RL_GPU_IDS="3"
-export DINO_DEVICE="cuda:0"
-export DINO_DEVICES="cuda:0,cuda:1,cuda:2"
-export ENV_GPU_IDS="0,1,2"
+# Use physical GPU IDs 4,5,6,7 directly.
+unset CUDA_VISIBLE_DEVICES
+export RL_GPU_IDS="${RL_GPU_IDS:-7}"
+export DINO_DEVICE="${DINO_DEVICE:-cuda:4}"
+export DINO_DEVICES="${DINO_DEVICES:-cuda:4,cuda:5,cuda:6}"
+export ENV_GPU_IDS="${ENV_GPU_IDS:-4,5,6}"
 export WORKERS_PER_ENV_GPU="${WORKERS_PER_ENV_GPU:-4}"
 export TRANSFORMER_CONTEXT_LEN="${TRANSFORMER_CONTEXT_LEN:-16}"
 
 # Get timestamp for log file naming
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 EXP_NAME="parallel_train_${TIMESTAMP}"
-LOG_FILE="/home/wgy/RL/train_log/${EXP_NAME}.log"
-VIZ_DIR="/home/wgy/RL/train_png/${EXP_NAME}"
+LOG_FILE="/root/RL/train_log/${EXP_NAME}.log"
+VIZ_DIR="/root/RL/train_png/${EXP_NAME}"
 
 # Create this run's visualization directory
 mkdir -p "$VIZ_DIR"
@@ -40,7 +39,7 @@ echo "[INFO] ENV_GPU_IDS: $ENV_GPU_IDS"
 echo "[INFO] WORKERS_PER_ENV_GPU: $WORKERS_PER_ENV_GPU"
 echo "[INFO] DINO_DEVICE: $DINO_DEVICE"
 echo "[INFO] DINO_DEVICES: $DINO_DEVICES"
-echo "[INFO] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "[INFO] CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "[INFO] RL_USE_TRANSFORMER: ${RL_USE_TRANSFORMER:-0}"
 echo "[INFO] TRANSFORMER_CONTEXT_LEN: $TRANSFORMER_CONTEXT_LEN"
 if [ -n "$POLICY_CHECKPOINT_LOAD" ]; then
@@ -49,8 +48,7 @@ fi
 if [ -n "$ENCODER_CHECKPOINT_OVERRIDE" ]; then
     echo "[INFO] ENCODER_CHECKPOINT_OVERRIDE: $ENCODER_CHECKPOINT_OVERRIDE"
 fi
-echo "[INFO] Logical GPU mapping: cuda:0->physical 4, cuda:1->physical 5, cuda:2->physical 6, cuda:3->physical 7"
-echo "[INFO] Habitat workers and DINO use logical GPUs 0,1,2; policy/update uses logical GPU 3"
+echo "[INFO] Habitat workers and DINO use physical GPUs 4,5,6; policy/update uses physical GPU 7"
 
 # HM3D scenes (same as run_train.sh)
 HABITAT_SCENES="00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,00023-zepmXAdrpjR,00031-Wo6kuutE9i7,00033-oPj9qMxrDEa,00087-YY8rqV6L6rf,00099-226REUyJh2K,00105-xWvSkKiWQpC,00108-oStKKWkQ1id,00155-iLDo95ZbDJq,00166-RaYrxWt5pR1,00177-VSxVP19Cdyw,00210-j2EJhFEQGCL,00245-741Fdj7NLF9,00250-U3oQjwTuMX8,00251-wsAYBFtQaL7,00254-YMNvYDhK8mB,00255-NGyoyh91xXJ,00269-JNiWU5TZLtt,00299-bdp1XNEdvmW,00304-X6Pct1msZv5,00323-yHLr6bvWsVm,00324-DoSbsoo4EAg,00327-xgLmjqzoAzF,00378-DqJKU7YU7dA,00384-ceJTwFNjqCt,00401-H8rQCnvBgo6,00404-QN2dRqwd84J,00417-nGhNxKrgBPb,00434-L5QEsaVqwrY,00444-sX9xad6ULKc,00466-xAHnY3QzFUN,00506-QVAA6zecMHu,00567-KjZrPggnHm8,00569-YJDUB7hWg9h,00591-JptJPosx1Z6,00598-mt9H8KcxRKD,00612-GsQBY83r3hb,00624-ooq3SnvC79d,00638-iePHCSf119p,00662-aRKASs4e8j1,00669-DNWbUAJYsPy,00680-YmWinf3mhb5,00706-YHmAkqgwe2p,00712-HZ2iMMBsBQ9,00733-GtM3JtRvvvR,00741-w8GiikYuFRk,00745-yX5efd48dLf,00750-E1NrAhMoqvB,00758-HfMobPm86Xn"
@@ -72,8 +70,8 @@ if [[ "${RL_USE_TRANSFORMER:-0}" == "1" || "${RL_USE_TRANSFORMER:-0}" == "true" 
 fi
 
 # Run training detached from the launching shell
-setsid /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_parallel.py \
-    --conf_path /home/wgy/RL/config \
+setsid /root/miniconda3/envs/habitat/bin/python /root/RL/train_habitat_parallel.py \
+    --conf_path /root/RL/config \
     --num_workers "$WORKERS_PER_ENV_GPU" \
     --episodes 100 \
     --num_steps 4000 \
@@ -82,10 +80,10 @@ setsid /root/miniconda3/envs/habitat/bin/python /home/wgy/RL/train_habitat_paral
     --dino_device "$DINO_DEVICE" \
     --dino_devices "$DINO_DEVICES" \
     --use_dino \
-    --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
+    --dataset_root /root/hm3d/scene_datasets/hm3d \
     --habitat_scenes "$HABITAT_SCENES" \
     --save_frames_to "$VIZ_DIR" \
-    --save_model_to /home/wgy/RL/RL_training/runs/model_weights \
+    --save_model_to /root/RL/RL_training/runs/model_weights \
     "${EXTRA_ARGS[@]}" \
     > "$LOG_FILE" 2>&1 < /dev/null &
 

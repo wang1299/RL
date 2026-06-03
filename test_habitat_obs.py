@@ -2,10 +2,10 @@ import sys
 import os
 import torch
 import numpy as np
-sys.path.append('/home/wgy/RL')
+sys.path.append('/root/RL')
 from components.environments.habitat_env import HabitatEnv
 
-HM3D_ROOT = "/home/wgy/hm3d/scene_datasets/hm3d"
+HM3D_ROOT = "/root/hm3d/scene_datasets/hm3d"
 SCENE = f"{HM3D_ROOT}/minival/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
 DATASET_CFG = f"{HM3D_ROOT}/hm3d_annotated_basis.scene_dataset_config.json"
 
@@ -16,11 +16,11 @@ env = HabitatEnv(
     scene_id=SCENE,
     render=False,
     use_detector=False,
-    save_debug_path='/home/wgy/RL/debug_viz'
+    save_debug_path='/root/RL/debug_viz'
 )
 env.episode_id = 999
 
 print("Env Reset")
 obs = env.reset(scene_number=1, random_start=True)
 obs = env.step(0)
-print(os.path.exists('/home/wgy/RL/debug_viz/ep_0999_scene_1/frame_0001.png'))
+print(os.path.exists('/root/RL/debug_viz/ep_0999_scene_1/frame_0001.png'))

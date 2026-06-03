@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # 创建输出目录
-mkdir -p /home/wgy/RL/train_log
-mkdir -p /home/wgy/RL/train_png
+mkdir -p /root/RL/train_log
+mkdir -p /root/RL/train_png
 
 # 设置环境变量
 export HF_ENDPOINT=https://hf-mirror.com
-export PYTHONPATH=$PYTHONPATH:$(pwd):/home/wgy/GroundingDINO
+export PYTHONPATH=$PYTHONPATH:$(pwd):/root/GroundingDINO
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Optional multi-GPU for heavy RGB encoder forward.
 # Usings the last 4 cards: GPU 4 is for GroundingDINO, GPUs 5,6,7 are for policy encoder
@@ -16,8 +16,8 @@ export DINO_DEVICE=${DINO_DEVICE:-"cuda:4"}
 # 获取当前时间戳作为 Log 文件名的一部分
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 EXP_NAME="train_${TIMESTAMP}"
-LOG_FILE="/home/wgy/RL/train_log/${EXP_NAME}.log"
-VIZ_DIR="/home/wgy/RL/train_png/${EXP_NAME}"
+LOG_FILE="/root/RL/train_log/${EXP_NAME}.log"
+VIZ_DIR="/root/RL/train_png/${EXP_NAME}"
 
 # 创建本次训练的可视化目录
 mkdir -p "$VIZ_DIR"

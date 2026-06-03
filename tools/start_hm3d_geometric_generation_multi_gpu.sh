@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 GPUS_CSV="${GPUS:-3,4,5,6,7}"

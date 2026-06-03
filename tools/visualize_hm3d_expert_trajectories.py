@@ -32,10 +32,10 @@ from train_habitat_parallel import (
 
 
 DEFAULT_DATA_DIR = (
-    "/home/wgy/RL/components/data/"
+    "/root/RL/components/data/"
     "hm3d_viewpoint_il_dataset_poi4yaw_geometric_20260524_172033"
 )
-DEFAULT_OUT_DIR = "/home/wgy/RL/train_png/expert_trajectory_visualization_20260524_172033"
+DEFAULT_OUT_DIR = "/root/RL/train_png/expert_trajectory_visualization_20260524_172033"
 
 
 def _scene_from_path(path: Path) -> str:
@@ -381,8 +381,8 @@ def main() -> None:
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--split-mode", choices=["file", "scene"], default="file")
     parser.add_argument("--topdown", action="store_true", help="Draw trajectories on Habitat topdown navmesh map.")
-    parser.add_argument("--dataset-root", default="/home/wgy/hm3d/scene_datasets/hm3d")
-    parser.add_argument("--conf-path", default="/home/wgy/RL/config")
+    parser.add_argument("--dataset-root", default="/root/hm3d/scene_datasets/hm3d")
+    parser.add_argument("--conf-path", default="/root/RL/config")
     parser.add_argument("--gpu-id", type=int, default=0)
     parser.add_argument("--meters-per-pixel", type=float, default=None)
     parser.add_argument("--line-width", type=int, default=2)

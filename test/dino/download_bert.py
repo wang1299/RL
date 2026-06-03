@@ -1,7 +1,7 @@
 from transformers import BertTokenizer, BertModel
 import os
 
-save_directory = "/home/wgy/bert-base-uncased"
+save_directory = "/root/bert-base-uncased"
 
 print(f"Downloading bert-base-uncased to {save_directory}...")
 try:

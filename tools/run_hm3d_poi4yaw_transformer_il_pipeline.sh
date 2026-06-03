@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 TS="${1:-$(date +%Y%m%d_%H%M%S)}"
 
 RUN_DIR="${HM3D_PIPELINE_RUN_DIR:-$ROOT/train_log/hm3d_poi4yaw_transformer_pipeline_$TS}"
@@ -15,7 +15,7 @@ mkdir -p "$RUN_DIR" "$RAW_DIR" "$FEATURE_DIR" "$WEIGHT_DIR" "$ROOT/train_log"
 printf "%s\n" "$$" > "$PID_FILE"
 exec >> "$PIPELINE_LOG" 2>&1
 
-export PYTHONPATH="$ROOT:/home/wgy/GroundingDINO:${PYTHONPATH:-}"
+export PYTHONPATH="$ROOT:/root/GroundingDINO:${PYTHONPATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export PYTHONUNBUFFERED=1
@@ -183,7 +183,7 @@ for idx in "${!GPUS[@]}"; do
     CUDA_VISIBLE_DEVICES="$gpu" /root/miniconda3/envs/habitat/bin/python -u \
       "$ROOT/ImitationLearning/scripts/generate_hm3d_viewpoint_expert_dataset.py" \
       --conf_path "$ROOT/config" \
-      --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
+      --dataset_root /root/hm3d/scene_datasets/hm3d \
       --habitat_scene "$scene" \
       --output_dir "$scene_dir" \
       --poi_dir "$ROOT/pois" \

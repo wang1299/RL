@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 TS="${1:-$(date +%Y%m%d_%H%M%S)}"
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 
 FEATURE_DIR="${HM3D_IL_FEATURE_DIR:-$ROOT/components/data/hm3d_viewpoint_il_dataset_poi2yaw_geometric_20260523_162231_sharded_50_features}"
 SAVE_DIR="${HM3D_IL_SAVE_DIR:-$ROOT/components/data/model_weights/hm3d_viewpoint_imitation_features_$TS}"
@@ -23,7 +23,7 @@ echo "[INFO] log_file: $LOG_FILE"
 echo "[INFO] pid_file: $PID_FILE"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4}"
-export PYTHONPATH="$ROOT:/home/wgy/GroundingDINO:${PYTHONPATH:-}"
+export PYTHONPATH="$ROOT:/root/GroundingDINO:${PYTHONPATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 echo "[INFO] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"

@@ -285,8 +285,8 @@ def generate(args) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate HM3D/Habitat expert imitation dataset.")
-    parser.add_argument("--conf_path", type=str, default="/home/wgy/RL/config")
-    parser.add_argument("--dataset_root", type=str, default="/home/wgy/hm3d/scene_datasets/hm3d")
+    parser.add_argument("--conf_path", type=str, default="/root/RL/config")
+    parser.add_argument("--dataset_root", type=str, default="/root/hm3d/scene_datasets/hm3d")
     parser.add_argument("--habitat_scene", type=str, default=None)
     parser.add_argument(
         "--habitat_scenes",
@@ -294,7 +294,7 @@ def parse_args():
         default=None,
         help="Comma-separated scene list. Defaults to the current 50-scene HM3D train set.",
     )
-    parser.add_argument("--output_dir", type=str, default="/home/wgy/RL/components/data/hm3d_il_dataset")
+    parser.add_argument("--output_dir", type=str, default="/root/RL/components/data/hm3d_il_dataset")
     parser.add_argument("--episodes_per_scene", type=int, default=8)
     parser.add_argument("--max_steps", type=int, default=600)
     parser.add_argument("--min_steps", type=int, default=30)

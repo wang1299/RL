@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 TS="${1:-$(date +%Y%m%d_%H%M%S)}"
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 
 IFS=',' read -r -a GPU_LIST <<< "${GPUS:-3,4,5,6,7}"
 PER_GPU="${PER_GPU:-1}"

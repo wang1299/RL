@@ -9,7 +9,7 @@ Usage:
         --env_gpu_ids 4,5,6 \
         --dino_devices cuda:4,cuda:5,cuda:6 \
         --episodes 100 \
-        --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
+        --dataset_root /root/hm3d/scene_datasets/hm3d \
         --habitat_scenes "00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,..." \
         --use_dino \
         --save_frames_to /path/to/frames
@@ -19,6 +19,7 @@ import argparse
 import sys
 import os
 import json
+import math
 import signal
 import tempfile
 from datetime import datetime
@@ -28,7 +29,7 @@ from typing import List, Tuple
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, "/home/wgy/GroundingDINO")
+sys.path.insert(0, "/root/GroundingDINO")
 
 from components.agents.reinforce_agent import ReinforceAgent
 from components.environments.habitat_env import HabitatEnv
@@ -38,10 +39,71 @@ from components.perception.hm3d_labels import (
     HM3D_REWARD_DINO_PROMPT,
     HM3D_REWARD_EXCLUDED_LABELS,
 )
+from components.perception.mp3d_labels import (
+    MP3D_DINO_PROMPT,
+    MP3D_REWARD_DINO_PROMPT,
+    MP3D_REWARD_EXCLUDED_LABELS,
+)
 from RL_training.runner.parallel_habitat_rl_train_runner import ParallelHabitatRLTrainRunner
 
 
 _SHUTDOWN_REQUESTED = False
+
+
+def _enable_realtime_logging():
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True, write_through=True)
+        except Exception:
+            pass
+
+
+def _parse_eval_start_position(value: str):
+    if value is None:
+        return None
+    parts = [part.strip() for part in str(value).split(",") if part.strip()]
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(
+            "--eval_start_position must be three comma-separated floats: x,y,z"
+        )
+    try:
+        return [float(part) for part in parts]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--eval_start_position must contain only numeric values"
+        ) from exc
+
+
+def _parse_eval_env_override(value: str):
+    text = str(value or "")
+    if "=" not in text:
+        raise argparse.ArgumentTypeError(
+            "--eval_env_override must be formatted as key=value"
+        )
+    key, raw_value = text.split("=", 1)
+    key = key.strip()
+    raw_value = raw_value.strip()
+    if not key:
+        raise argparse.ArgumentTypeError("--eval_env_override key cannot be empty")
+    return key, _coerce_override_value(raw_value)
+
+
+def _coerce_override_value(value: str):
+    lower = str(value).strip().lower()
+    if lower in {"true", "false"}:
+        return lower == "true"
+    if lower in {"none", "null"}:
+        return None
+    try:
+        if any(ch in lower for ch in (".", "e")):
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value
+
+
+_enable_realtime_logging()
 
 
 def _handle_shutdown_signal(signum, frame):
@@ -59,6 +121,11 @@ def _safe_run_tag(path: str) -> str:
     return name if name else datetime.now().strftime("parallel_train_%Y%m%d_%H%M%S")
 
 
+def _looks_like_mp3d_dataset(*values) -> bool:
+    text = " ".join(str(value or "") for value in values).lower()
+    return "mp3d" in text or "matterport3d" in text
+
+
 def _save_agent_checkpoint(agent, save_root: str, run_tag: str, status: str):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = Path(save_root) / run_tag
@@ -66,8 +133,35 @@ def _save_agent_checkpoint(agent, save_root: str, run_tag: str, status: str):
     agent.save_model(str(save_dir), file_name=file_name)
 
 
+def _metric_tag(value) -> str:
+    try:
+        return f"{float(value):.4f}".replace(".", "p")
+    except (TypeError, ValueError):
+        return "nan"
+
+
+def _save_best_score_checkpoint(agent, save_root: str, run_tag: str, metrics: dict):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    update_index = int(metrics.get("update_index", 0) or 0)
+    episode_count = int(metrics.get("episode_count", 0) or 0)
+    score_tag = _metric_tag(metrics.get("avg_score"))
+    coverage_tag = _metric_tag(metrics.get("avg_coverage"))
+    save_dir = Path(save_root) / run_tag
+    file_name = (
+        f"{timestamp}_{run_tag}_BEST_update_{update_index:04d}"
+        f"_ep_{episode_count:05d}_score_{score_tag}_cov_{coverage_tag}.pth"
+    )
+    agent.save_model(str(save_dir), file_name=file_name)
+    print(
+        "[INFO] Best-score checkpoint saved: "
+        f"update={update_index}, episode={episode_count}, "
+        f"score={float(metrics.get('avg_score', 0.0)):.4f}, "
+        f"coverage={float(metrics.get('avg_coverage', 0.0)):.4f}"
+    )
+
+
 def _resolve_habitat_scene_path(hm3d_root: str, token: str) -> str:
-    """Resolve a single scene token to its .basis.glb path."""
+    """Resolve a single scene token to a Habitat scene glb path."""
     token = str(token).strip()
     if not token:
         return None
@@ -76,7 +170,7 @@ def _resolve_habitat_scene_path(hm3d_root: str, token: str) -> str:
     if token_path.is_file():
         return str(token_path)
     if token_path.is_dir():
-        candidates = sorted(token_path.glob("*.basis.glb"))
+        candidates = sorted(token_path.glob("*.basis.glb")) or sorted(token_path.glob("*.glb"))
         if candidates:
             return str(candidates[0])
 
@@ -85,6 +179,10 @@ def _resolve_habitat_scene_path(hm3d_root: str, token: str) -> str:
     hash_part = normalized.split('-')[-1]
 
     search_patterns = [
+        f"{normalized}/{hash_part}.basis.glb",
+        f"{normalized}/{normalized}.glb",
+        f"{normalized}/*.basis.glb",
+        f"{normalized}/*.glb",
         f"train/{normalized}/{hash_part}.basis.glb",
         f"train/{normalized}*/**/*.basis.glb",
         f"val/{normalized}/{hash_part}.basis.glb",
@@ -133,7 +231,8 @@ def _build_habitat_dataset_config(
     base_config_file: str,
     scene_paths: List[str],
     dataset_root: str,
-    output_dir: str = None
+    output_dir: str = None,
+    name_prefix: str = "habitat_selected",
 ) -> str:
     """Build a filtered Habitat dataset config for selected scenes."""
     with open(base_config_file, "r", encoding="utf-8") as f:
@@ -151,6 +250,8 @@ def _build_habitat_dataset_config(
         if not any(scene_name in item for scene_name in selected_names):
             continue
         filtered_stage_paths.append(str(Path(dataset_root) / item))
+    if not filtered_stage_paths:
+        filtered_stage_paths = [str(Path(scene_path)) for scene_path in scene_paths]
 
     config_data["stages"]["paths"][".glb"] = filtered_stage_paths
     if "scene_instances" in config_data and "paths" in config_data["scene_instances"]:
@@ -167,7 +268,7 @@ def _build_habitat_dataset_config(
         name_hash = hashlib.md5(name_str).hexdigest()[:8]
         selected_tag = f"{len(selected_names)}_scenes_{name_hash}"
 
-    target_path = target_dir / f"hm3d_selected_{selected_tag}.scene_dataset_config.json"
+    target_path = target_dir / f"{name_prefix}_{selected_tag}.scene_dataset_config.json"
     with open(target_path, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=2)
 
@@ -224,8 +325,14 @@ def main():
     parser.add_argument(
         "--dataset_root",
         type=str,
-        default="/home/wgy/hm3d/scene_datasets/hm3d",
-        help="Path to HM3D dataset root"
+        default="/root/hm3d/scene_datasets/hm3d",
+        help="Path to Habitat dataset root"
+    )
+    parser.add_argument(
+        "--scene_dataset_config_file",
+        type=str,
+        default=None,
+        help="Optional Habitat scene dataset config. Defaults to hm3d_annotated_basis.scene_dataset_config.json under dataset_root."
     )
     parser.add_argument(
         "--habitat_scene",
@@ -257,11 +364,11 @@ def main():
     
     # Other
     parser.add_argument("--use_dino", action="store_true", help="Use GroundingDINO detector")
-    parser.add_argument("--save_frames_to", type=str, default="/home/wgy/RL/train_png",
+    parser.add_argument("--save_frames_to", type=str, default="/root/RL/train_png",
                         help="Directory to save visualization frames")
     parser.add_argument("--conf_path", type=str, default="config",
                         help="Path to configuration directory")
-    parser.add_argument("--save_model_to", type=str, default="/home/wgy/RL/RL_training/runs/model_weights",
+    parser.add_argument("--save_model_to", type=str, default="/root/RL/RL_training/runs/model_weights",
                         help="Directory where model checkpoints are saved on completion, interruption, or failure")
     parser.add_argument("--no_save_on_exit", action="store_true",
                         help="Disable automatic model checkpoint saving on exit")
@@ -279,6 +386,20 @@ def main():
                         help="Optional CSV path for per-episode evaluation metrics")
     parser.add_argument("--eval_no_stop_on_success", action="store_true",
                         help="During --eval_only, keep running until environment max_actions even after success")
+    parser.add_argument("--eval_no_random_start", action="store_true",
+                        help="During --eval_only, use Habitat's default/fixed start instead of random sampling")
+    parser.add_argument("--eval_start_position", type=_parse_eval_start_position, default=None,
+                        help="Optional fixed eval start position as x,y,z. Implies --eval_no_random_start.")
+    parser.add_argument("--eval_start_yaw_deg", type=float, default=None,
+                        help="Optional fixed eval start yaw in degrees. Implies --eval_no_random_start.")
+    parser.add_argument("--eval_disable_stagnation_termination", action="store_true",
+                        help="During --eval_only, disable low-score/coverage plateau early termination")
+    parser.add_argument("--eval_width", type=int, default=None,
+                        help="Optional eval-only RGB width override; leaves config unchanged for training/HM3D scripts.")
+    parser.add_argument("--eval_height", type=int, default=None,
+                        help="Optional eval-only RGB height override; leaves config unchanged for training/HM3D scripts.")
+    parser.add_argument("--eval_env_override", action="append", type=_parse_eval_env_override, default=[],
+                        help="Eval-only env config override as key=value. Useful for MP3D-specific diagnostics.")
     parser.add_argument("--transformer_context_len", type=int, default=None,
                         help="Number of recent online steps to feed to Transformer policy inference")
     
@@ -292,6 +413,22 @@ def main():
     agent_config = _load_config_mapping(args.conf_path, "agent_config.yaml", "agent.json")
     navigation_config = _load_config_mapping(args.conf_path, "navigation_config.yaml", "navigation.json")
     env_config = _load_config_mapping(args.conf_path, "env_config.yaml", "env.json")
+    if args.eval_only and args.eval_disable_stagnation_termination:
+        env_config["stagnation_termination_window"] = 0
+        print("[INFO] Eval-only stagnation termination disabled")
+    if args.eval_only:
+        if args.eval_width is not None:
+            env_config["width"] = int(args.eval_width)
+        if args.eval_height is not None:
+            env_config["height"] = int(args.eval_height)
+        if args.eval_width is not None or args.eval_height is not None:
+            print(
+                "[INFO] Eval-only resolution override: "
+                f"width={env_config.get('width')}, height={env_config.get('height')}"
+            )
+        for key, value in args.eval_env_override:
+            env_config[key] = value
+            print(f"[INFO] Eval-only env override: {key}={value!r}")
 
     # Ensure numeric types are correct (YAML/JSON flavors may parse numbers as strings)
     for k in ["alpha", "gamma", "entropy_coef"]:
@@ -347,8 +484,8 @@ def main():
     dino_service = None
     if args.use_dino:
         print("[INFO] Initializing GroundingDINO detector...")
-        dino_config = "/home/wgy/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-        dino_weights = "/home/wgy/GroundingDINO/weights/groundingdino_swint_ogc.pth"
+        dino_config = "/root/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+        dino_weights = "/root/GroundingDINO/weights/groundingdino_swint_ogc.pth"
         
         if not os.path.exists(dino_weights):
             print(f"[WARNING] DINO weights not found at {dino_weights}, running without detector")
@@ -358,24 +495,40 @@ def main():
                 dino_devices = [part.strip() for part in args.dino_devices.split(",") if part.strip()]
             if not dino_devices:
                 dino_devices = [args.dino_device]
-            default_dino_prompt = (
-                HM3D_DINO_PROMPT
-                if bool(env_config.get("dino_prompt_include_excluded", False))
-                else HM3D_REWARD_DINO_PROMPT
+            is_mp3d_dataset = _looks_like_mp3d_dataset(
+                args.dataset_root,
+                args.scene_dataset_config_file,
+                args.habitat_scene,
+                args.habitat_scenes,
             )
+            dataset_label = "MP3D" if is_mp3d_dataset else "HM3D"
+            if is_mp3d_dataset:
+                default_dino_prompt = (
+                    MP3D_DINO_PROMPT
+                    if bool(env_config.get("dino_prompt_include_excluded", False))
+                    else MP3D_REWARD_DINO_PROMPT
+                )
+                default_excluded_labels = MP3D_REWARD_EXCLUDED_LABELS
+            else:
+                default_dino_prompt = (
+                    HM3D_DINO_PROMPT
+                    if bool(env_config.get("dino_prompt_include_excluded", False))
+                    else HM3D_REWARD_DINO_PROMPT
+                )
+                default_excluded_labels = HM3D_REWARD_EXCLUDED_LABELS
             dino_text_prompt = str(env_config.get("dino_text_prompt", default_dino_prompt))
             dino_box_threshold = float(env_config.get("dino_box_threshold", 0.35))
             dino_text_threshold = float(env_config.get("dino_text_threshold", 0.30))
             dino_filter_excluded = bool(env_config.get("dino_filter_reward_excluded", True))
             dino_excluded_labels = (
-                env_config.get("reward_excluded_labels", list(HM3D_REWARD_EXCLUDED_LABELS))
+                env_config.get("reward_excluded_labels", list(default_excluded_labels))
                 if dino_filter_excluded
                 else []
             )
             dino_max_box_area_ratio = float(env_config.get("dino_max_box_area_ratio", 1.0))
             dino_max_box_aspect_ratio = float(env_config.get("dino_max_box_aspect_ratio", 100.0))
             print(
-                f"[INFO] DINO HM3D prompt with {dino_text_prompt.count('.')} labels; "
+                f"[INFO] DINO {dataset_label} prompt with {dino_text_prompt.count('.')} labels; "
                 f"box_threshold={dino_box_threshold:.2f}, text_threshold={dino_text_threshold:.2f}, "
                 f"filter_reward_excluded={dino_filter_excluded}"
             )
@@ -434,12 +587,17 @@ def main():
     
     # Build filtered dataset config
     print("[INFO] Building filtered Habitat dataset config...")
-    base_config_file = os.path.join(hm3d_root, "hm3d_annotated_basis.scene_dataset_config.json")
+    base_config_file = args.scene_dataset_config_file or os.path.join(
+        hm3d_root,
+        "hm3d_annotated_basis.scene_dataset_config.json",
+    )
+    config_prefix = "hm3d_selected" if args.scene_dataset_config_file is None else "habitat_selected"
     dataset_config = _build_habitat_dataset_config(
         base_config_file,
         habitat_scene_ids,
         hm3d_root,
         output_dir=args.save_frames_to,
+        name_prefix=config_prefix,
     )
     print(f"[INFO] Dataset config: {dataset_config}")
     
@@ -450,6 +608,8 @@ def main():
     allowed_env_keys = {
         "width",
         "height",
+        "dino_width",
+        "dino_height",
         "instance_merge_dist",
         "coverage_cell_size",
         "nav_sample_points",
@@ -469,6 +629,12 @@ def main():
         "dino_max_box_aspect_ratio",
         "gt_validation_iou_threshold",
         "gt_validation_mode",
+        "mp3d_spatial_fallback",
+        "mp3d_spatial_fallback_min_overlap",
+        "mp3d_spatial_fallback_center",
+        "mp3d_same_label_center_fallback",
+        "mp3d_same_label_center_max_norm_dist",
+        "mp3d_category_agnostic_validation",
         "success_recall_threshold",
         "success_min_coverage",
         "success_reward",
@@ -491,6 +657,7 @@ def main():
         config_file=dataset_config,
         scene_id=habitat_scene_ids[0],
         scene_ids=habitat_scene_ids,
+        gpu_device_id=parsed_gpu_ids[0] if parsed_gpu_ids else 0,
         render=False,
         use_detector=False,
         detector=None,
@@ -565,11 +732,18 @@ def main():
             num_workers=total_workers,
             device=device,
             save_dir=args.save_frames_to,
-            base_scene_ids=[Path(p).parent.name for p in habitat_scene_ids],
+            base_scene_ids=habitat_scene_ids,
             detection_service=dino_service,
             env_config=env_config,
             scene_count=len(habitat_scene_ids),
             env_gpu_ids=env_gpu_ids if len(env_gpu_ids) > 0 else None,
+            best_checkpoint_callback=(
+                None
+                if args.no_save_on_exit or args.eval_only
+                else lambda metrics: _save_best_score_checkpoint(
+                    agent, args.save_model_to, run_tag, metrics
+                )
+            ),
         )
 
         # Adjust episode count based on number of scenes
@@ -579,11 +753,29 @@ def main():
         if args.eval_only:
             mode = "deterministic/argmax" if args.eval_deterministic else "sampled"
             print(f"[INFO] Starting policy evaluation only ({mode}); RL updates are disabled")
+            eval_start_rotation = (
+                math.radians(args.eval_start_yaw_deg)
+                if args.eval_start_yaw_deg is not None
+                else None
+            )
+            eval_random_start = not (
+                bool(args.eval_no_random_start)
+                or args.eval_start_position is not None
+                or eval_start_rotation is not None
+            )
+            if not eval_random_start:
+                print(
+                    "[INFO] Eval fixed/default start enabled: "
+                    f"position={args.eval_start_position}, "
+                    f"yaw_deg={args.eval_start_yaw_deg}"
+                )
             runner.evaluate_policy(
                 deterministic=bool(args.eval_deterministic),
                 output_csv=args.eval_output_csv,
-                random_start=True,
+                random_start=eval_random_start,
                 stop_on_success=not bool(args.eval_no_stop_on_success),
+                eval_start_position=args.eval_start_position,
+                eval_start_rotation=eval_start_rotation,
             )
             if getattr(runner, "was_interrupted", False) or _SHUTDOWN_REQUESTED:
                 exit_status = "INTERRUPTED"

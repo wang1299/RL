@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 NUM_SHARDS="${NUM_SHARDS:-1}"
 SHARD_INDEX="${SHARD_INDEX:-0}"
@@ -15,13 +15,13 @@ mkdir -p "$ROOT/train_log"
 mkdir -p "$DATA_DIR"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}"
-export PYTHONPATH="${PYTHONPATH:-}:$ROOT:/home/wgy/GroundingDINO"
+export PYTHONPATH="${PYTHONPATH:-}:$ROOT:/root/GroundingDINO"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 setsid /root/miniconda3/envs/habitat/bin/python -u \
   "$ROOT/ImitationLearning/scripts/generate_hm3d_viewpoint_expert_dataset.py" \
   --conf_path "$ROOT/config" \
-  --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
+  --dataset_root /root/hm3d/scene_datasets/hm3d \
   --output_dir "$DATA_DIR" \
   --poi_dir "$ROOT/pois" \
   --start_yaw_degrees "${START_YAW_DEGREES:-0,180}" \

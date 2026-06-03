@@ -786,17 +786,17 @@ def generate(args) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate HM3D viewpoint-cover expert imitation dataset.")
-    parser.add_argument("--conf_path", type=str, default="/home/wgy/RL/config")
-    parser.add_argument("--dataset_root", type=str, default="/home/wgy/hm3d/scene_datasets/hm3d")
+    parser.add_argument("--conf_path", type=str, default="/root/RL/config")
+    parser.add_argument("--dataset_root", type=str, default="/root/hm3d/scene_datasets/hm3d")
     parser.add_argument("--habitat_scene", type=str, default=None)
     parser.add_argument("--habitat_scenes", type=str, default=None)
-    parser.add_argument("--output_dir", type=str, default="/home/wgy/RL/components/data/hm3d_il_dataset")
+    parser.add_argument("--output_dir", type=str, default="/root/RL/components/data/hm3d_il_dataset")
     parser.add_argument("--episodes_per_scene", type=int, default=8)
     parser.add_argument("--max_steps", type=int, default=900)
     parser.add_argument("--min_steps", type=int, default=80)
     parser.add_argument("--candidate_viewpoints", type=int, default=180)
     parser.add_argument("--max_cover_viewpoints", type=int, default=28)
-    parser.add_argument("--poi_dir", type=str, default="/home/wgy/RL/pois")
+    parser.add_argument("--poi_dir", type=str, default="/root/RL/pois")
     parser.add_argument("--start_yaw_degrees", type=str, default="0,180")
     parser.add_argument("--viewpoint_yaw_degrees", type=str, default="0,60,120,180,240,300")
     parser.add_argument(

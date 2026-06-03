@@ -5,5 +5,5 @@
   "gamma": 0.99,
   "entropy_coef": 0.2,
   "num_steps": 4000,
-  "encoder_path": "/home/wgy/RL/components/data/model_weights/feature_encoder_15_512_32_512.pth"
+  "encoder_path": "/root/RL/components/data/model_weights/feature_encoder_15_512_32_512.pth"
 }

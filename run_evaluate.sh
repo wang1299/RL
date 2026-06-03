@@ -4,11 +4,11 @@ set -euo pipefail
 # 用法:
 #   bash run_eval.sh <model_path> [conf_path] [num_episodes]
 # 示例:
-#   bash run_eval.sh /path/to/model.pth /home/wgy/RL/config 100
-#   bash run_eval.sh /path/to/model_dir /home/wgy/RL/config 50
+#   bash run_eval.sh /path/to/model.pth /root/RL/config 100
+#   bash run_eval.sh /path/to/model_dir /root/RL/config 50
 
 MODEL_PATH="${1:-}"
-CONF_PATH="${2:-/home/wgy/RL/config}"
+CONF_PATH="${2:-/root/RL/config}"
 NUM_EPISODES="${3:-100}"
 
 if [[ -z "$MODEL_PATH" ]]; then
@@ -17,8 +17,8 @@ if [[ -z "$MODEL_PATH" ]]; then
 fi
 
 # 创建输出目录
-mkdir -p /home/wgy/RL/eval_log
-mkdir -p /home/wgy/RL/eval_png
+mkdir -p /root/RL/eval_log
+mkdir -p /root/RL/eval_png
 
 # 环境变量
 export HF_ENDPOINT=https://hf-mirror.com
@@ -27,8 +27,8 @@ export PYTHONPATH="${PYTHONPATH:-}:$(pwd):$(pwd)/GroundingDINO"
 # 时间戳与输出路径
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 EXP_NAME="eval_${TIMESTAMP}"
-LOG_FILE="/home/wgy/RL/eval_log/${EXP_NAME}.log"
-VIZ_DIR="/home/wgy/RL/eval_png/${EXP_NAME}"
+LOG_FILE="/root/RL/eval_log/${EXP_NAME}.log"
+VIZ_DIR="/root/RL/eval_png/${EXP_NAME}"
 mkdir -p "$VIZ_DIR"
 
 echo "Starting evaluation..."

@@ -186,7 +186,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--log", type=Path, required=True)
-    parser.add_argument("--repo-root", type=Path, default=Path("/home/wgy/RL"))
+    parser.add_argument("--repo-root", type=Path, default=Path("/root/RL"))
     parser.add_argument("--threshold", type=float, default=0.55)
     parser.add_argument("--min-stats", type=int, default=2)
     parser.add_argument("--interval-seconds", type=int, default=1800)

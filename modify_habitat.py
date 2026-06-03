@@ -1,4 +1,4 @@
-with open('/home/wgy/RL/components/environments/habitat_env.py', 'r') as f:
+with open('/root/RL/components/environments/habitat_env.py', 'r') as f:
     lines = f.read()
 
 # Replace init
@@ -43,6 +43,6 @@ lines = lines.replace('''        return Observation([rgb, None, None, None], 0.0
         reward = 0.0 if (is_reset or terminated) else -self.rho
         return Observation([rgb, None, None, None], reward, terminated, truncated, {})''')
 
-with open('/home/wgy/RL/components/environments/habitat_env.py', 'w') as f:
+with open('/root/RL/components/environments/habitat_env.py', 'w') as f:
     f.write(lines)
 print("Finished rewriting HabitatEnv")

@@ -1,6 +1,6 @@
 import habitat_sim
 
-HM3D_ROOT = "/home/wgy/hm3d/scene_datasets/hm3d"
+HM3D_ROOT = "/root/hm3d/scene_datasets/hm3d"
 SCENE = f"{HM3D_ROOT}/minival/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
 DATASET_CFG = f"{HM3D_ROOT}/hm3d_annotated_basis.scene_dataset_config.json"
 

@@ -7,6 +7,7 @@ import csv
 import sys
 import contextlib
 import re
+import json
 from collections import Counter, deque
 from components.utils.observation import Observation
 from components.perception.hm3d_labels import (
@@ -14,6 +15,13 @@ from components.perception.hm3d_labels import (
     HM3D_COMPATIBLE_LABEL_GROUPS,
     HM3D_LABEL_ALIASES,
     HM3D_REWARD_EXCLUDED_LABELS,
+)
+from components.perception.mp3d_labels import (
+    MP3D_CANONICAL_LABELS,
+    MP3D_COMPATIBLE_LABEL_GROUPS,
+    MP3D_IGNORE_LABELS,
+    MP3D_LABEL_ALIASES,
+    MP3D_REWARD_EXCLUDED_LABELS,
 )
 from habitat_sim.utils.common import quat_from_angle_axis
 import magnum as mn
@@ -168,10 +176,34 @@ _DEFAULT_REWARD_EXCLUDED_LABELS = {"Wall", "Floor", "Window"}
 # The original project used AI2-THOR object categories. Habitat/HM3D scenes use
 # Matterport-style categories, so override the old vocabulary for validation and
 # reward accounting while leaving the rest of the environment logic untouched.
-_DINO_CANONICAL_LABELS = set(HM3D_CANONICAL_LABELS)
+_DINO_CANONICAL_LABELS = set(HM3D_CANONICAL_LABELS) | set(MP3D_CANONICAL_LABELS)
 _DINO_LABEL_ALIASES = dict(HM3D_LABEL_ALIASES)
+_DINO_LABEL_ALIASES.update(MP3D_LABEL_ALIASES)
 _DINO_COMPATIBLE_LABEL_GROUPS = [set(group) for group in HM3D_COMPATIBLE_LABEL_GROUPS]
-_DEFAULT_REWARD_EXCLUDED_LABELS = set(HM3D_REWARD_EXCLUDED_LABELS)
+_DINO_COMPATIBLE_LABEL_GROUPS.extend(set(group) for group in MP3D_COMPATIBLE_LABEL_GROUPS)
+_DEFAULT_REWARD_EXCLUDED_LABELS = set(HM3D_REWARD_EXCLUDED_LABELS) | set(MP3D_REWARD_EXCLUDED_LABELS)
+
+
+def _label_tokens_static(label):
+    text = str(label or "").replace("_", " ").replace(".", " ")
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
+    return [token.lower() for token in re.findall(r"[A-Za-z0-9]+", text)]
+
+
+def _build_alias_token_map(aliases):
+    return {
+        tuple(_label_tokens_static(alias)): canonical
+        for alias, canonical in aliases.items()
+    }
+
+
+_HM3D_LABEL_ALIASES = dict(HM3D_LABEL_ALIASES)
+_MP3D_LABEL_ALIASES = dict(HM3D_LABEL_ALIASES)
+_MP3D_LABEL_ALIASES.update(MP3D_LABEL_ALIASES)
+_HM3D_ALIAS_TOKEN_MAP = _build_alias_token_map(_HM3D_LABEL_ALIASES)
+_MP3D_ALIAS_TOKEN_MAP = _build_alias_token_map(_MP3D_LABEL_ALIASES)
+_DINO_ALIAS_TOKEN_MAP = _build_alias_token_map(_DINO_LABEL_ALIASES)
 
 
 class HabitatEnv:
@@ -184,6 +216,8 @@ class HabitatEnv:
         render=False,
         width=300,
         height=300,
+        dino_width=None,
+        dino_height=None,
         use_detector=False,
         detector=None,
         det_score_thr=0.3,
@@ -207,6 +241,10 @@ class HabitatEnv:
         no_progress_window=100,
         no_progress_penalty=0.02,
         no_progress_min_coverage_delta=1e-4,
+        stagnation_termination_window=0,
+        stagnation_min_score=0.35,
+        stagnation_min_coverage=0.35,
+        stagnation_penalty=0.0,
         turn_penalty=0.0003,
         stationary_turn_window=20,
         stationary_turn_penalty=0.01,
@@ -216,6 +254,12 @@ class HabitatEnv:
         dino_max_box_aspect_ratio=100.0,
         gt_validation_iou_threshold=0.10,
         gt_validation_mode="relaxed",
+        mp3d_spatial_fallback=True,
+        mp3d_spatial_fallback_min_overlap=0.25,
+        mp3d_spatial_fallback_center=True,
+        mp3d_same_label_center_fallback=True,
+        mp3d_same_label_center_max_norm_dist=0.35,
+        mp3d_category_agnostic_validation=True,
         success_recall_threshold=1.00,
         success_min_coverage=0.30,
         success_reward=10.0,
@@ -255,6 +299,12 @@ class HabitatEnv:
             os.makedirs(self.save_debug_path, exist_ok=True)
         self.width = width
         self.height = height
+        self.dino_width = int(dino_width) if dino_width is not None else None
+        self.dino_height = int(dino_height) if dino_height is not None else None
+        if self.dino_width is not None and self.dino_width <= 0:
+            self.dino_width = None
+        if self.dino_height is not None and self.dino_height <= 0:
+            self.dino_height = None
         self.dataset_root = dataset_root
         self.use_detector = use_detector
         self.detector = detector
@@ -276,6 +326,10 @@ class HabitatEnv:
         self.no_progress_window = max(int(no_progress_window), 1)
         self.no_progress_penalty = max(float(no_progress_penalty), 0.0)
         self.no_progress_min_coverage_delta = max(float(no_progress_min_coverage_delta), 0.0)
+        self.stagnation_termination_window = max(int(stagnation_termination_window), 0)
+        self.stagnation_min_score = max(float(stagnation_min_score), 0.0)
+        self.stagnation_min_coverage = max(float(stagnation_min_coverage), 0.0)
+        self.stagnation_penalty = max(float(stagnation_penalty), 0.0)
         self.turn_penalty = max(float(turn_penalty), 0.0)
         self.stationary_turn_window = max(int(stationary_turn_window), 1)
         self.stationary_turn_penalty = max(float(stationary_turn_penalty), 0.0)
@@ -289,6 +343,12 @@ class HabitatEnv:
             self.dino_max_box_aspect_ratio = 100.0
         self.gt_validation_iou_threshold = max(float(gt_validation_iou_threshold), 0.0)
         self.gt_validation_mode = str(gt_validation_mode or "relaxed").lower()
+        self.mp3d_spatial_fallback = bool(mp3d_spatial_fallback)
+        self.mp3d_spatial_fallback_min_overlap = max(float(mp3d_spatial_fallback_min_overlap), 0.0)
+        self.mp3d_spatial_fallback_center = bool(mp3d_spatial_fallback_center)
+        self.mp3d_same_label_center_fallback = bool(mp3d_same_label_center_fallback)
+        self.mp3d_same_label_center_max_norm_dist = max(float(mp3d_same_label_center_max_norm_dist), 0.0)
+        self.mp3d_category_agnostic_validation = bool(mp3d_category_agnostic_validation)
         self.success_recall_threshold = float(success_recall_threshold)
         self.success_min_coverage = float(success_min_coverage)
         self.success_reward = float(success_reward)
@@ -311,6 +371,7 @@ class HabitatEnv:
         self.traj_pixels_all = deque()
         self.semantic_id_to_label = {}
         self.scene_reward_gt_ids = set()
+        self._last_dino_reject_pairs = []
         self.semantic_label_source = None
         self.discovered_objects = set()
         self.discovered_instances = set()
@@ -412,7 +473,36 @@ class HabitatEnv:
         semantic_sensor_spec.sensor_type = habitat_sim.SensorType.SEMANTIC
         semantic_sensor_spec.resolution = [self.height, self.width]
 
-        agent_cfg.sensor_specifications = [rgb_sensor_spec, depth_sensor_spec, semantic_sensor_spec]
+        sensor_specs = [rgb_sensor_spec, depth_sensor_spec, semantic_sensor_spec]
+
+        if self.dino_width is not None or self.dino_height is not None:
+            dino_width = int(self.dino_width or self.width)
+            dino_height = int(self.dino_height or self.height)
+
+            dino_rgb_sensor_spec = habitat_sim.CameraSensorSpec()
+            dino_rgb_sensor_spec.uuid = "dino_color_sensor"
+            dino_rgb_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
+            dino_rgb_sensor_spec.resolution = [dino_height, dino_width]
+
+            dino_depth_sensor_spec = habitat_sim.CameraSensorSpec()
+            dino_depth_sensor_spec.uuid = "dino_depth_sensor"
+            dino_depth_sensor_spec.sensor_type = habitat_sim.SensorType.DEPTH
+            dino_depth_sensor_spec.resolution = [dino_height, dino_width]
+
+            dino_semantic_sensor_spec = habitat_sim.CameraSensorSpec()
+            dino_semantic_sensor_spec.uuid = "dino_semantic_sensor"
+            dino_semantic_sensor_spec.sensor_type = habitat_sim.SensorType.SEMANTIC
+            dino_semantic_sensor_spec.resolution = [dino_height, dino_width]
+
+            sensor_specs.extend(
+                [
+                    dino_rgb_sensor_spec,
+                    dino_depth_sensor_spec,
+                    dino_semantic_sensor_spec,
+                ]
+            )
+
+        agent_cfg.sensor_specifications = sensor_specs
 
         agent_cfg.action_space = {
             "turn_left": habitat_sim.agent.ActionSpec(
@@ -533,7 +623,7 @@ class HabitatEnv:
     def _sample_poi_start_position(self, scene_id):
         import json
         scene_hash = scene_id.split("-")[0].split("/")[-1] if "/" in scene_id else scene_id.split("-")[0]
-        poi_file = f"/home/wgy/RL/pois/{scene_hash}_poi.json"
+        poi_file = f"/root/RL/pois/{scene_hash}_poi.json"
         
         if os.path.exists(poi_file):
             try:
@@ -690,6 +780,8 @@ class HabitatEnv:
                     "entropy",
                     "moved_distance",
                     "yaw_delta",
+                    "eval_no_progress_explore",
+                    "eval_no_progress_queue",
                 ])
 
         return self._process_obs(obs, is_reset=True)
@@ -720,6 +812,11 @@ class HabitatEnv:
 
         depth = obs.get("depth_sensor")
         semantic_obs = obs.get("semantic_sensor")
+        dino_rgb = obs.get("dino_color_sensor", rgb)
+        if dino_rgb is not None and getattr(dino_rgb, "ndim", 0) == 3 and dino_rgb.shape[2] == 4:
+            dino_rgb = dino_rgb[:, :, :3]
+        dino_depth = obs.get("dino_depth_sensor", depth)
+        dino_semantic_obs = obs.get("dino_semantic_sensor", semantic_obs)
 
         agent_state = self.sim.get_agent(0).get_state()
         self._last_rgb = rgb
@@ -730,17 +827,23 @@ class HabitatEnv:
         detections = []
         # Optional: Run detector if enabled
         if self.use_detector and self.detector:
-             depth = obs["depth_sensor"]
-             agent_state = self.sim.get_agent(0).get_state()
-             
              as_dict = {
                  'position': {'x': agent_state.position[0], 'y': agent_state.position[1], 'z': agent_state.position[2]},
                  'rotation': {'x': agent_state.rotation.x, 'y': agent_state.rotation.y, 'z': agent_state.rotation.z, 'w': agent_state.rotation.w}
              }
              
              try:
-                 detections = self.detector.detect(rgb, depth_image=depth, agent_state=as_dict)
+                 prev_rgb = self._last_rgb
+                 prev_depth = self._last_depth
+                 prev_semantic = self._last_semantic
+                 self._last_rgb = dino_rgb
+                 self._last_depth = dino_depth
+                 self._last_semantic = dino_semantic_obs
+                 detections = self.detector.detect(dino_rgb, depth_image=dino_depth, agent_state=as_dict)
                  detections = self.validate_detections(detections)
+                 self._last_rgb = prev_rgb
+                 self._last_depth = prev_depth
+                 self._last_semantic = prev_semantic
                  for det in detections:
                      if det.get("score", 0) < self.det_score_thr:
                          continue
@@ -762,6 +865,9 @@ class HabitatEnv:
                      # Kept for diagnostics only; score/reward use GT semantic IDs.
                      self.discovered_instances.add(self._build_instance_key(det, label))
              except Exception as e:
+                 self._last_rgb = rgb
+                 self._last_depth = depth
+                 self._last_semantic = semantic_obs
                  print(f"Warning: Detector failed: {e}")
 
         # Save Visualizations
@@ -896,6 +1002,8 @@ class HabitatEnv:
         )
         truncated = self.step_count >= self.max_actions
         terminated = bool(success and not is_reset)
+        stagnated = False
+        stagnation_reason = ""
 
         if is_reset:
             reward = 0.0
@@ -904,7 +1012,8 @@ class HabitatEnv:
             score_gain = current_score - self.prev_score
             has_progress = (
                 score_gain > 0.0
-                or path_coverage_delta > self.no_progress_min_coverage_delta
+                or coverage_delta > self.no_progress_min_coverage_delta
+                or visible_coverage_delta > self.no_progress_min_coverage_delta
             )
             if has_progress:
                 self.steps_since_progress = 0
@@ -936,6 +1045,16 @@ class HabitatEnv:
                 self.stationary_turn_steps = 0
             if self.steps_since_progress >= self.no_progress_window:
                 reward -= self.no_progress_penalty
+            if (
+                self.stagnation_termination_window > 0
+                and self.steps_since_progress >= self.stagnation_termination_window
+                and current_score < self.stagnation_min_score
+                and coverage < self.stagnation_min_coverage
+            ):
+                truncated = True
+                stagnated = True
+                stagnation_reason = "low_score_coverage_plateau"
+                reward -= self.stagnation_penalty
 
         self.prev_score = current_score
         self.prev_coverage = coverage
@@ -993,6 +1112,8 @@ class HabitatEnv:
                         "entropy",
                         "moved_distance",
                         "yaw_delta",
+                        "eval_no_progress_explore",
+                        "eval_no_progress_queue",
                     ])
                 diag = getattr(self, "pending_action_diagnostics", {}) or {}
                 writer.writerow([
@@ -1021,6 +1142,8 @@ class HabitatEnv:
                     round(float(diag.get("entropy", 0.0)), 6) if diag else "",
                     round(float(moved_distance), 6),
                     round(float(yaw_delta), 6),
+                    diag.get("eval_no_progress_explore", ""),
+                    diag.get("eval_no_progress_queue", ""),
                 ])
 
         if (terminated or truncated) and self.current_ep_dir is not None:
@@ -1051,6 +1174,8 @@ class HabitatEnv:
                 "visible_cells": len(self.visible_cells),
                 "coverage_cells": len(coverage_cells),
                 "steps_since_progress": int(getattr(self, "steps_since_progress", 0)),
+                "stagnated": bool(stagnated),
+                "stagnation_reason": stagnation_reason,
                 "stationary_turn_steps": int(getattr(self, "stationary_turn_steps", 0)),
                 "total_navigable_cells": int(denom),
                 "agent_pos": (ax, az),
@@ -1293,21 +1418,18 @@ class HabitatEnv:
 
     @staticmethod
     def _label_tokens(label):
-        text = str(label or "").replace("_", " ").replace(".", " ")
-        text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
-        text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
-        return [token.lower() for token in re.findall(r"[A-Za-z0-9]+", text)]
+        return _label_tokens_static(label)
 
     @classmethod
     def _canonicalize_label(cls, raw_label):
+        return cls._canonicalize_label_with_aliases(raw_label, _DINO_ALIAS_TOKEN_MAP)
+
+    @classmethod
+    def _canonicalize_label_with_aliases(cls, raw_label, alias_tokens):
         tokens = cls._label_tokens(raw_label)
         if not tokens:
             return None, "empty_label"
 
-        alias_tokens = {
-            tuple(cls._label_tokens(alias)): canonical
-            for alias, canonical in _DINO_LABEL_ALIASES.items()
-        }
         full_key = tuple(tokens)
         if full_key in alias_tokens:
             return alias_tokens[full_key], None
@@ -1329,6 +1451,26 @@ class HabitatEnv:
         if not all(covered):
             return None, "compound_label"
         return canonical_matches[0], None
+
+    def _looks_like_mp3d_scene(self):
+        values = [
+            getattr(self, "dataset_root", ""),
+            getattr(self, "config_file", ""),
+            getattr(self, "scene_id", ""),
+            getattr(self, "semantic_label_source", ""),
+        ]
+        text = " ".join(str(value or "").lower() for value in values)
+        return "mp3d" in text or "matterport3d" in text or ".house" in text or ".semseg.json" in text
+
+    def _canonicalize_scene_label(self, raw_label):
+        aliases = _MP3D_ALIAS_TOKEN_MAP if self._looks_like_mp3d_scene() else _HM3D_ALIAS_TOKEN_MAP
+        return self._canonicalize_label_with_aliases(raw_label, aliases)
+
+    def _is_ignored_scene_label(self, raw_label):
+        if not self._looks_like_mp3d_scene():
+            return False
+        label_text = " ".join(self._label_tokens(raw_label))
+        return label_text in MP3D_IGNORE_LABELS
 
     @staticmethod
     def _labels_compatible(det_label, gt_label):
@@ -1352,7 +1494,7 @@ class HabitatEnv:
         boxes = []
         for semantic_id in np.unique(semantic_array):
             semantic_id = int(semantic_id)
-            if semantic_id <= 0:
+            if semantic_id <= 0 or semantic_id >= 65535:
                 continue
 
             mask = semantic_array == semantic_id
@@ -1365,7 +1507,11 @@ class HabitatEnv:
                 continue
 
             raw_label = self.semantic_id_to_label.get(semantic_id, f"semantic_{semantic_id}")
-            canonical_label, reason = self._canonicalize_label(raw_label)
+            canonical_label, reason = self._canonicalize_scene_label(raw_label)
+            if self._is_ignored_scene_label(raw_label):
+                continue
+            if reason is None and canonical_label in self.reward_excluded_labels:
+                continue
             boxes.append(
                 {
                     "semantic_id": semantic_id,
@@ -1418,16 +1564,18 @@ class HabitatEnv:
         """Validate DINO detections against the current Habitat semantic frame."""
         if not detections:
             self._last_validated_detections = []
+            self._last_dino_reject_pairs = []
             return []
 
         semantic_boxes = self._extract_all_visible_semantic_boxes(self._last_semantic)
         validated = []
         used_semantic_ids = set()
+        reject_pairs = []
 
         for det in detections:
             det2 = dict(det)
             raw_label = det2.get("label", det2.get("class", "unknown"))
-            canonical_label, label_error = self._canonicalize_label(raw_label)
+            canonical_label, label_error = self._canonicalize_scene_label(raw_label)
             det2["canonical_label"] = canonical_label
             det2["gt_label"] = None
             det2["gt_canonical_label"] = None
@@ -1435,28 +1583,62 @@ class HabitatEnv:
             det2["gt_iou"] = 0.0
             det2["is_gt_valid"] = False
 
-            if label_error is not None:
+            is_mp3d_scene = self._looks_like_mp3d_scene()
+            mp3d_category_agnostic = (
+                is_mp3d_scene
+                and getattr(self, "mp3d_category_agnostic_validation", True)
+            )
+
+            if label_error is not None and not mp3d_category_agnostic:
                 det2["reject_reason"] = label_error
+                self._record_reject_pair(det2, reject_pairs)
                 validated.append(det2)
                 continue
 
             if canonical_label in getattr(self, "reward_excluded_labels", set()):
                 det2["reject_reason"] = "reward_excluded_label"
+                self._record_reject_pair(det2, reject_pairs)
                 validated.append(det2)
                 continue
 
             det_box = det2.get("bbox", det2.get("box"))
             if det_box is None or len(det_box) != 4:
                 det2["reject_reason"] = "missing_bbox"
+                self._record_reject_pair(det2, reject_pairs)
                 validated.append(det2)
                 continue
             if self._is_oversized_detection_box(det_box):
                 det2["reject_reason"] = "oversized_box"
+                self._record_reject_pair(det2, reject_pairs)
                 validated.append(det2)
                 continue
 
             best_box = None
             best_iou = 0.0
+            best_overlap_min = 0.0
+            best_center_inside = False
+            best_fallback_box = None
+            best_fallback_iou = 0.0
+            best_fallback_overlap_min = 0.0
+            best_fallback_center_inside = False
+            best_fallback_mode = None
+            best_fallback_rank = None
+            best_same_label_box = None
+            best_same_label_iou = 0.0
+            best_same_label_overlap_min = 0.0
+            best_same_label_center_inside = False
+            best_same_label_center_dist = None
+            best_same_label_area_ratio = None
+            best_same_label_width_ratio = None
+            best_same_label_height_ratio = None
+            best_same_label_mode = None
+            best_same_label_rank = None
+            best_mp3d_object_box = None
+            best_mp3d_object_iou = 0.0
+            best_mp3d_object_overlap_min = 0.0
+            best_mp3d_object_center_inside = False
+            best_mp3d_object_mode = None
+            best_mp3d_object_rank = None
             best_any_box = None
             best_any_iou = 0.0
             for gt_box in semantic_boxes:
@@ -1467,13 +1649,90 @@ class HabitatEnv:
                     best_any_iou = iou
                     best_any_box = gt_box
 
+                overlap_min = self._bbox_intersection_over_min_area(det_box, gt_box["bbox"])
+                center_inside = self._box_center_inside(det_box, gt_box["bbox"])
+                if mp3d_category_agnostic and self._is_reward_semantic_box(gt_box):
+                    mode = None
+                    if iou >= self.gt_validation_iou_threshold:
+                        mode = "mp3d_object_presence_iou"
+                    else:
+                        spatial_mode = self._mp3d_spatial_fallback_match(
+                            det_box,
+                            gt_box["bbox"],
+                            overlap_min=overlap_min,
+                            center_inside=center_inside,
+                        )
+                        if spatial_mode is not None:
+                            mode = f"mp3d_object_presence_{spatial_mode}"
+                    if mode is not None:
+                        rank = (1 if center_inside else 0, overlap_min, iou)
+                        if best_mp3d_object_rank is None or rank > best_mp3d_object_rank:
+                            best_mp3d_object_rank = rank
+                            best_mp3d_object_box = gt_box
+                            best_mp3d_object_iou = iou
+                            best_mp3d_object_overlap_min = overlap_min
+                            best_mp3d_object_center_inside = center_inside
+                            best_mp3d_object_mode = mode
+
                 gt_canonical = gt_box.get("canonical_label")
                 if self.gt_validation_mode != "off" and not self._labels_compatible(canonical_label, gt_canonical):
                     continue
 
+                center_dist = self._bbox_center_normalized_distance(det_box, gt_box["bbox"])
+                if is_mp3d_scene and canonical_label == gt_canonical:
+                    rank = (-center_dist, overlap_min, iou)
+                    if best_same_label_rank is None or rank > best_same_label_rank:
+                        shape_diag = self._bbox_shape_diagnostics(det_box, gt_box["bbox"])
+                        best_same_label_rank = rank
+                        best_same_label_box = gt_box
+                        best_same_label_iou = iou
+                        best_same_label_overlap_min = overlap_min
+                        best_same_label_center_inside = center_inside
+                        best_same_label_center_dist = center_dist
+                        best_same_label_area_ratio = shape_diag["area_ratio"]
+                        best_same_label_width_ratio = shape_diag["width_ratio"]
+                        best_same_label_height_ratio = shape_diag["height_ratio"]
+                        best_same_label_mode = self._mp3d_same_label_center_fallback_match(
+                            canonical_label,
+                            gt_canonical,
+                            center_dist,
+                        )
+
+                fallback_mode = self._mp3d_spatial_fallback_match(
+                    det_box,
+                    gt_box["bbox"],
+                    overlap_min=overlap_min,
+                    center_inside=center_inside,
+                )
+                if fallback_mode is not None:
+                    rank = (1 if center_inside else 0, overlap_min, iou)
+                    if best_fallback_rank is None or rank > best_fallback_rank:
+                        best_fallback_rank = rank
+                        best_fallback_box = gt_box
+                        best_fallback_iou = iou
+                        best_fallback_overlap_min = overlap_min
+                        best_fallback_center_inside = center_inside
+                        best_fallback_mode = fallback_mode
+
                 if best_box is None or iou > best_iou:
                     best_iou = iou
                     best_box = gt_box
+                    best_overlap_min = overlap_min
+                    best_center_inside = center_inside
+
+            if best_mp3d_object_box is not None:
+                det2["gt_iou"] = float(best_mp3d_object_iou)
+                det2["gt_label"] = best_mp3d_object_box["label"]
+                det2["gt_canonical_label"] = best_mp3d_object_box.get("canonical_label")
+                det2["gt_semantic_id"] = int(best_mp3d_object_box["semantic_id"])
+                det2["gt_match_mode"] = best_mp3d_object_mode
+                det2["gt_overlap_min_area"] = float(best_mp3d_object_overlap_min)
+                det2["gt_center_inside"] = bool(best_mp3d_object_center_inside)
+                det2["is_gt_valid"] = True
+                det2["reject_reason"] = None
+                used_semantic_ids.add(best_mp3d_object_box["semantic_id"])
+                validated.append(det2)
+                continue
 
             if best_box is None:
                 # HM3D semantic category names are not always aligned with the
@@ -1497,6 +1756,7 @@ class HabitatEnv:
                         det2["gt_label"] = best_any_box["label"]
                         det2["gt_canonical_label"] = best_any_box.get("canonical_label")
                         det2["gt_semantic_id"] = int(best_any_box["semantic_id"])
+                    self._record_reject_pair(det2, reject_pairs)
                     validated.append(det2)
                     continue
             else:
@@ -1508,7 +1768,50 @@ class HabitatEnv:
             det2["gt_semantic_id"] = int(best_box["semantic_id"])
 
             if best_iou < self.gt_validation_iou_threshold:
+                if best_fallback_box is not None:
+                    det2["gt_iou"] = float(best_fallback_iou)
+                    det2["gt_label"] = best_fallback_box["label"]
+                    det2["gt_canonical_label"] = best_fallback_box.get("canonical_label")
+                    det2["gt_semantic_id"] = int(best_fallback_box["semantic_id"])
+                    det2["gt_match_mode"] = best_fallback_mode
+                    det2["gt_overlap_min_area"] = float(best_fallback_overlap_min)
+                    det2["gt_center_inside"] = bool(best_fallback_center_inside)
+                    det2["is_gt_valid"] = True
+                    det2["reject_reason"] = None
+                    used_semantic_ids.add(best_fallback_box["semantic_id"])
+                    validated.append(det2)
+                    continue
+                if best_same_label_box is not None and best_same_label_mode is not None:
+                    det2["gt_iou"] = float(best_same_label_iou)
+                    det2["gt_label"] = best_same_label_box["label"]
+                    det2["gt_canonical_label"] = best_same_label_box.get("canonical_label")
+                    det2["gt_semantic_id"] = int(best_same_label_box["semantic_id"])
+                    det2["gt_match_mode"] = best_same_label_mode
+                    det2["gt_overlap_min_area"] = float(best_same_label_overlap_min)
+                    det2["gt_center_inside"] = bool(best_same_label_center_inside)
+                    det2["gt_center_norm_dist"] = float(best_same_label_center_dist)
+                    det2["is_gt_valid"] = True
+                    det2["reject_reason"] = None
+                    used_semantic_ids.add(best_same_label_box["semantic_id"])
+                    validated.append(det2)
+                    continue
                 det2["reject_reason"] = "low_iou"
+                det2["gt_overlap_min_area"] = float(best_overlap_min)
+                det2["gt_center_inside"] = bool(best_center_inside)
+                if best_same_label_box is not None:
+                    det2["gt_same_label"] = best_same_label_box["label"]
+                    det2["gt_same_label_canonical"] = best_same_label_box.get("canonical_label")
+                    det2["gt_same_label_iou"] = float(best_same_label_iou)
+                    det2["gt_same_label_overlap_min_area"] = float(best_same_label_overlap_min)
+                    det2["gt_same_label_center_inside"] = bool(best_same_label_center_inside)
+                    det2["gt_same_label_center_norm_dist"] = float(best_same_label_center_dist)
+                    if best_same_label_area_ratio is not None:
+                        det2["gt_same_label_area_ratio"] = float(best_same_label_area_ratio)
+                    if best_same_label_width_ratio is not None:
+                        det2["gt_same_label_width_ratio"] = float(best_same_label_width_ratio)
+                    if best_same_label_height_ratio is not None:
+                        det2["gt_same_label_height_ratio"] = float(best_same_label_height_ratio)
+                self._record_reject_pair(det2, reject_pairs)
                 validated.append(det2)
                 continue
 
@@ -1518,8 +1821,71 @@ class HabitatEnv:
             validated.append(det2)
 
         self._last_validated_detections = validated
+        self._last_dino_reject_pairs = reject_pairs
         self._save_dino_validation_overlay(validated, semantic_boxes)
         return validated
+
+    def _is_reward_semantic_box(self, gt_box):
+        if gt_box is None:
+            return False
+        try:
+            semantic_id = int(gt_box.get("semantic_id"))
+        except Exception:
+            return False
+        reward_ids = getattr(self, "scene_reward_gt_ids", set())
+        if reward_ids and semantic_id not in reward_ids:
+            return False
+        raw_label = gt_box.get("label")
+        if self._is_ignored_scene_label(raw_label):
+            return False
+        canonical_label = gt_box.get("canonical_label")
+        if canonical_label is not None and canonical_label in getattr(self, "reward_excluded_labels", set()):
+            return False
+        return True
+
+    def _record_reject_pair(self, det, reject_pairs):
+        pair = self._format_reject_pair(det)
+        det["reject_pair"] = pair
+        reject_pairs.append(pair)
+
+    def _format_reject_pair(self, det):
+        det_label = det.get("canonical_label") or det.get("label") or "unknown"
+        gt_label = det.get("gt_label")
+        gt_canonical = det.get("gt_canonical_label")
+        gt_text = str(gt_label) if gt_label is not None else "None"
+        gt_can_text = str(gt_canonical) if gt_canonical is not None else "None"
+        try:
+            iou = float(det.get("gt_iou", 0.0))
+        except Exception:
+            iou = 0.0
+        reason = det.get("reject_reason") or "unknown"
+        extra = ""
+        if det.get("gt_same_label_center_norm_dist") is not None:
+            try:
+                extra += f"/d{float(det.get('gt_same_label_center_norm_dist')):.2f}"
+            except Exception:
+                pass
+        if det.get("gt_same_label_overlap_min_area") is not None:
+            try:
+                extra += f"/ov{float(det.get('gt_same_label_overlap_min_area')):.2f}"
+            except Exception:
+                pass
+        if det.get("gt_same_label_area_ratio") is not None:
+            try:
+                extra += f"/ar{float(det.get('gt_same_label_area_ratio')):.2f}"
+            except Exception:
+                pass
+        if det.get("gt_same_label_width_ratio") is not None:
+            try:
+                extra += f"/wr{float(det.get('gt_same_label_width_ratio')):.2f}"
+            except Exception:
+                pass
+        if det.get("gt_same_label_height_ratio") is not None:
+            try:
+                extra += f"/hr{float(det.get('gt_same_label_height_ratio')):.2f}"
+            except Exception:
+                pass
+        return f"{det_label}->{gt_text}/{gt_can_text}@{iou:.2f}{extra}:{reason}"
 
     def _save_dino_validation_overlay(self, detections, semantic_boxes):
         if getattr(self, "current_ep_dir", None) is None or self._last_rgb is None:
@@ -1589,6 +1955,15 @@ class HabitatEnv:
                         text = f"REJ {label}: {reason} GT {det.get('gt_label')} IoU {det.get('gt_iou', 0):.2f}"
                     else:
                         text = f"REJ {label}: {reason}"
+                    diag = []
+                    if det.get("gt_same_label_center_norm_dist") is not None:
+                        diag.append(f"d={float(det.get('gt_same_label_center_norm_dist')):.2f}")
+                    if det.get("gt_same_label_overlap_min_area") is not None:
+                        diag.append(f"ov={float(det.get('gt_same_label_overlap_min_area')):.2f}")
+                    if det.get("gt_same_label_area_ratio") is not None:
+                        diag.append(f"ar={float(det.get('gt_same_label_area_ratio')):.1f}")
+                    if diag:
+                        text = f"{text} {' '.join(diag)}"
                 if font:
                     draw.text((sbox[0] + 2, max(0, sbox[1] - 10 * scale)), text, fill=color, font=font)
 
@@ -1881,8 +2256,16 @@ class HabitatEnv:
     def _build_semantic_id_label_map(self):
         self.semantic_label_source = None
         mapping = self._load_hm3d_semantic_txt_label_map()
+        mp3d_mapping = self._load_mp3d_house_semantic_label_map()
+        if mp3d_mapping:
+            mapping.update(mp3d_mapping)
         try:
-            semantic_scene = self.sim.semantic_annotations()
+            semantic_scene = None
+            semantic_scene_attr = getattr(self.sim, "semantic_scene", None)
+            if semantic_scene_attr is not None:
+                semantic_scene = semantic_scene_attr() if callable(semantic_scene_attr) else semantic_scene_attr
+            elif hasattr(self.sim, "semantic_annotations"):
+                semantic_scene = self.sim.semantic_annotations()
             for obj in getattr(semantic_scene, "objects", []):
                 semantic_id = self._parse_semantic_object_id(getattr(obj, "id", None))
                 if semantic_id is None:
@@ -1905,6 +2288,104 @@ class HabitatEnv:
         if mapping and self.semantic_label_source is None:
             self.semantic_label_source = "semantic_annotations"
         return mapping
+
+    def _load_mp3d_house_semantic_label_map(self):
+        paths = self._find_mp3d_semantic_paths()
+        if paths is None:
+            return {}
+        house_path, semseg_path = paths
+
+        try:
+            category_by_label_index = {}
+            with open(house_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line.startswith("C "):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 6:
+                        continue
+                    try:
+                        label_index = int(parts[2])
+                    except Exception:
+                        continue
+                    fine_label = self._clean_mp3d_house_label(parts[3])
+                    coarse_label = self._clean_mp3d_house_label(parts[5])
+                    category_by_label_index[label_index] = fine_label or coarse_label
+
+            with open(semseg_path, "r", encoding="utf-8") as f:
+                semseg = json.load(f)
+        except Exception:
+            return {}
+
+        mapping = {}
+        for group in semseg.get("segGroups", []):
+            try:
+                semantic_id = int(group.get("id"))
+                label_index = int(group.get("label_index"))
+            except Exception:
+                continue
+            label = category_by_label_index.get(label_index)
+            if label:
+                mapping[semantic_id] = label
+
+        if mapping:
+            self.semantic_label_source = f"{semseg_path}+{house_path}"
+        return mapping
+
+    @staticmethod
+    def _clean_mp3d_house_label(label):
+        text = str(label or "").strip().replace("#", " ")
+        text = text.replace("_", " ")
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _find_mp3d_semantic_paths(self):
+        scene_ref = str(getattr(self, "scene_id", "") or "").strip()
+        if not scene_ref:
+            return None
+
+        candidate_dirs = []
+        if os.path.isdir(scene_ref):
+            candidate_dirs.append(scene_ref)
+            scene_stem = os.path.basename(scene_ref.rstrip(os.sep))
+        else:
+            candidate_dirs.append(os.path.dirname(scene_ref))
+            scene_stem = os.path.basename(scene_ref)
+            for suffix in (".basis.glb", ".semantic.glb", ".glb"):
+                if scene_stem.endswith(suffix):
+                    scene_stem = scene_stem[: -len(suffix)]
+                    break
+
+        dataset_root = str(getattr(self, "dataset_root", "") or "").strip()
+        if dataset_root:
+            for pattern in (
+                os.path.join(dataset_root, scene_stem),
+                os.path.join(dataset_root, f"*{scene_stem}*"),
+            ):
+                for candidate in sorted(glob.glob(pattern)):
+                    if os.path.isdir(candidate):
+                        candidate_dirs.append(candidate)
+
+        seen_dirs = set()
+        for directory in candidate_dirs:
+            if not directory:
+                continue
+            directory = os.path.abspath(directory)
+            if directory in seen_dirs or not os.path.isdir(directory):
+                continue
+            seen_dirs.add(directory)
+            house_path = os.path.join(directory, f"{scene_stem}.house")
+            semseg_path = os.path.join(directory, f"{scene_stem}.semseg.json")
+            if os.path.isfile(house_path) and os.path.isfile(semseg_path):
+                return house_path, semseg_path
+
+            house_matches = sorted(glob.glob(os.path.join(directory, "*.house")))
+            semseg_matches = sorted(glob.glob(os.path.join(directory, "*.semseg.json")))
+            if house_matches and semseg_matches:
+                return house_matches[0], semseg_matches[0]
+
+        return None
 
     def _load_hm3d_semantic_txt_label_map(self):
         mapping = {}
@@ -1995,7 +2476,9 @@ class HabitatEnv:
     def _build_scene_reward_gt_ids(self):
         reward_ids = set()
         for semantic_id, raw_label in self.semantic_id_to_label.items():
-            canonical_label, reason = self._canonicalize_label(raw_label)
+            if self._is_ignored_scene_label(raw_label):
+                continue
+            canonical_label, reason = self._canonicalize_scene_label(raw_label)
             if reason is not None:
                 continue
             if canonical_label in self.reward_excluded_labels:
@@ -2081,6 +2564,99 @@ class HabitatEnv:
         if denom <= 0:
             return 0.0
         return float(inter_area / denom)
+
+    def _bbox_intersection_over_min_area(self, box_a, box_b):
+        ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+        bx1, by1, bx2, by2 = [float(v) for v in box_b]
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+            return 0.0
+
+        inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+        area_a = max((ax2 - ax1), 0.0) * max((ay2 - ay1), 0.0)
+        area_b = max((bx2 - bx1), 0.0) * max((by2 - by1), 0.0)
+        denom = min(area_a, area_b)
+        if denom <= 0.0:
+            return 0.0
+        return float(inter_area / denom)
+
+    @staticmethod
+    def _box_center_inside(inner_box, outer_box):
+        x1, y1, x2, y2 = [float(v) for v in inner_box]
+        ox1, oy1, ox2, oy2 = [float(v) for v in outer_box]
+        cx = (x1 + x2) * 0.5
+        cy = (y1 + y2) * 0.5
+        return bool(ox1 <= cx <= ox2 and oy1 <= cy <= oy2)
+
+    @staticmethod
+    def _bbox_center_normalized_distance(box_a, box_b):
+        ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+        bx1, by1, bx2, by2 = [float(v) for v in box_b]
+        acx = (ax1 + ax2) * 0.5
+        acy = (ay1 + ay2) * 0.5
+        bcx = (bx1 + bx2) * 0.5
+        bcy = (by1 + by2) * 0.5
+        bw = max(bx2 - bx1, 1.0)
+        bh = max(by2 - by1, 1.0)
+        diag = max(float(np.hypot(bw, bh)), 1.0)
+        return float(np.hypot(acx - bcx, acy - bcy) / diag)
+
+    @staticmethod
+    def _bbox_shape_diagnostics(box_a, box_b):
+        ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+        bx1, by1, bx2, by2 = [float(v) for v in box_b]
+        aw = max(ax2 - ax1, 0.0)
+        ah = max(ay2 - ay1, 0.0)
+        bw = max(bx2 - bx1, 0.0)
+        bh = max(by2 - by1, 0.0)
+        area_a = aw * ah
+        area_b = bw * bh
+
+        def symmetric_ratio(value_a, value_b):
+            small = max(min(value_a, value_b), 1.0)
+            large = max(value_a, value_b)
+            return float(large / small)
+
+        return {
+            "area_ratio": symmetric_ratio(area_a, area_b),
+            "width_ratio": symmetric_ratio(aw, bw),
+            "height_ratio": symmetric_ratio(ah, bh),
+        }
+
+    def _mp3d_spatial_fallback_match(self, det_box, gt_box, overlap_min=None, center_inside=None):
+        if not getattr(self, "mp3d_spatial_fallback", False):
+            return None
+        if not self._looks_like_mp3d_scene():
+            return None
+
+        if center_inside is None:
+            center_inside = self._box_center_inside(det_box, gt_box)
+        if getattr(self, "mp3d_spatial_fallback_center", True) and center_inside:
+            return "mp3d_center_in_gt"
+
+        if overlap_min is None:
+            overlap_min = self._bbox_intersection_over_min_area(det_box, gt_box)
+        threshold = float(getattr(self, "mp3d_spatial_fallback_min_overlap", 0.25) or 0.0)
+        if threshold > 0.0 and overlap_min >= threshold:
+            return "mp3d_intersection_min_area"
+        return None
+
+    def _mp3d_same_label_center_fallback_match(self, det_label, gt_label, center_norm_dist):
+        if not getattr(self, "mp3d_same_label_center_fallback", False):
+            return None
+        if not self._looks_like_mp3d_scene():
+            return None
+        if det_label is None or gt_label is None or det_label != gt_label:
+            return None
+        threshold = float(getattr(self, "mp3d_same_label_center_max_norm_dist", 0.35) or 0.0)
+        if threshold <= 0.0:
+            return None
+        if float(center_norm_dist) <= threshold:
+            return "mp3d_same_label_center"
+        return None
 
     def _match_detection_to_semantic_box(self, det, semantic_boxes, matched_semantic_indices):
         det_box = det.get("bbox", det.get("box"))

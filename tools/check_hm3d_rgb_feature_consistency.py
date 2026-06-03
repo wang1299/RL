@@ -70,7 +70,7 @@ def main() -> None:
     parser.add_argument("--feature-dir", required=True)
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--encoder-path", default=None)
-    parser.add_argument("--conf-path", default="/home/wgy/RL/config")
+    parser.add_argument("--conf-path", default="/root/RL/config")
     parser.add_argument("--gpu-id", type=int, default=0)
     parser.add_argument("--max-files", type=int, default=8)
     parser.add_argument("--frames-per-file", type=int, default=4)

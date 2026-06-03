@@ -16,8 +16,8 @@
 ### 方式 1: 使用 nohup 脚本（推荐）
 
 ```bash
-chmod +x /home/wgy/RL/run_train_parallel.sh
-nohup /home/wgy/RL/run_train_parallel.sh > /home/wgy/RL/train_log/nohup.log 2>&1 &
+chmod +x /root/RL/run_train_parallel.sh
+nohup /root/RL/run_train_parallel.sh > /root/RL/train_log/nohup.log 2>&1 &
 ```
 
 这将：
@@ -26,16 +26,16 @@ nohup /home/wgy/RL/run_train_parallel.sh > /home/wgy/RL/train_log/nohup.log 2>&1
 - 在物理 GPU 3,5,6 上运行 Habitat 环境和 GroundingDINO 检测池
 - 按全局 epoch 调度 50 个 HM3D 场景：前 50 次 scene 分配覆盖 1-50 各一次，然后才进入下一轮
 - 每个场景训练 100 个 episode
-- 保存可视化和日志到 `/home/wgy/RL/train_log` 和 `/home/wgy/RL/train_png`
+- 保存可视化和日志到 `/root/RL/train_log` 和 `/root/RL/train_png`
 
 ### 方式 2: 直接运行 Python 脚本
 
 ```bash
-cd /home/wgy/RL
+cd /root/RL
 export CUDA_VISIBLE_DEVICES="3,5,6,7"
 
 python train_habitat_parallel.py \
-    --conf_path /home/wgy/RL/config \
+    --conf_path /root/RL/config \
     --num_workers 4 \
     --episodes 100 \
     --num_steps 4000 \
@@ -44,9 +44,9 @@ python train_habitat_parallel.py \
     --dino_device "cuda:0" \
     --dino_devices "cuda:0,cuda:1,cuda:2" \
     --use_dino \
-    --dataset_root /home/wgy/hm3d/scene_datasets/hm3d \
+    --dataset_root /root/hm3d/scene_datasets/hm3d \
     --habitat_scenes "00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,..." \
-    --save_frames_to /home/wgy/RL/train_png/my_run
+    --save_frames_to /root/RL/train_png/my_run
 ```
 
 ### 方式 3: 自定义参数
@@ -54,13 +54,13 @@ python train_habitat_parallel.py \
 ```bash
 # 仅训练 5 个场景，使用 6 个 worker，GPU 0-5
 python train_habitat_parallel.py \
-    --conf_path /home/wgy/RL/config \
+    --conf_path /root/RL/config \
     --num_workers 6 \
     --episodes 200 \
     --gpu_ids "0,1,2,3,4,5" \
     --dino_device "cuda:6" \
     --habitat_scenes "00016-qk9eeNeR4vw,00017-oEPjPNSPmzL,00023-zepmXAdrpjR,00031-Wo6kuutE9i7,00033-oPj9qMxrDEa" \
-    --save_frames_to /home/wgy/RL/train_png/test_5scenes
+    --save_frames_to /root/RL/train_png/test_5scenes
 ```
 
 ## 配置说明
@@ -106,9 +106,9 @@ nohup python train_habitat_parallel.py \
 | `--dino_device` | "cuda:3" | 直接运行时 DINO 默认物理 GPU 3；`run_train_parallel.sh` 中传入逻辑 `"cuda:0"` |
 | `--dino_devices` | "cuda:3,cuda:5,cuda:6" | 直接运行时 DINO 检测池使用物理 GPU 3,5,6；`run_train_parallel.sh` 中传入逻辑 `"cuda:0,cuda:1,cuda:2"` |
 | `--use_dino` | (flag) | 启用 GroundingDINO 检测 |
-| `--dataset_root` | `/home/wgy/hm3d/...` | HM3D 数据集根路径 |
+| `--dataset_root` | `/root/hm3d/...` | HM3D 数据集根路径 |
 | `--habitat_scenes` | None | 场景 ID 列表 (逗号分隔) |
-| `--save_frames_to` | `/home/wgy/RL/train_png` | 可视化输出目录 |
+| `--save_frames_to` | `/root/RL/train_png` | 可视化输出目录 |
 | `--conf_path` | "config" | 配置文件目录 (agent/navigation/env config) |
 
 ## 监控训练
@@ -117,16 +117,16 @@ nohup python train_habitat_parallel.py \
 
 ```bash
 # 实时监控
-tail -f /home/wgy/RL/train_log/parallel_train_*.log
+tail -f /root/RL/train_log/parallel_train_*.log
 
 # 查看最新的
-tail -f $(ls -t /home/wgy/RL/train_log/*.log | head -1)
+tail -f $(ls -t /root/RL/train_log/*.log | head -1)
 ```
 
 ### TensorBoard 可视化
 
 ```bash
-tensorboard --logdir /home/wgy/RL/RL_training/runs
+tensorboard --logdir /root/RL/RL_training/runs
 ```
 
 ### 查看 GPU 使用
@@ -143,7 +143,7 @@ watch -n 1 nvidia-smi
 
 ```bash
 # 获取 PID
-cat /home/wgy/RL/train_png/parallel_train_*/training.pid
+cat /root/RL/train_png/parallel_train_*/training.pid
 
 # 优雅停止（Ctrl+C）
 kill -TERM <PID>
@@ -259,11 +259,11 @@ Main Process (physical GPU 7)     Worker Process (physical GPU 3/5/6)
 bash run_train_parallel.sh
 
 # 监控
-tail -f /home/wgy/RL/train_log/parallel_train_*.log
+tail -f /root/RL/train_log/parallel_train_*.log
 
 # 查看 GPU
 nvidia-smi
 
 # 停止
-kill $(cat /home/wgy/RL/train_png/parallel_train_*/training.pid)
+kill $(cat /root/RL/train_png/parallel_train_*/training.pid)
 ```

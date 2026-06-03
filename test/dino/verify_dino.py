@@ -15,7 +15,7 @@ except ImportError as e:
 
 def test_dino():
     # Paths
-    grounding_dino_root = "/home/wgy/GroundingDINO"
+    grounding_dino_root = "/root/GroundingDINO"
     config_path = os.path.join(grounding_dino_root, "groundingdino/config/GroundingDINO_SwinT_OGC.py")
     checkpoint_path = os.path.join(grounding_dino_root, "weights/groundingdino_swint_ogc.pth")
     image_path = os.path.join(grounding_dino_root, ".asset/cats.png")

@@ -69,10 +69,14 @@ def _worker_loop(
                     scene_id = task[1] if len(task) > 1 else None
                     random_start = task[2] if len(task) > 2 else True
                     episode_tag = task[3] if len(task) > 3 else None
+                    start_position = task[4] if len(task) > 4 else None
+                    start_rotation = task[5] if len(task) > 5 else None
                     obs = env.reset(
                         scene_number=scene_id,
                         random_start=random_start,
                         episode_tag=episode_tag,
+                        start_position=start_position,
+                        start_rotation=start_rotation,
                     )
                     result_queue.put((worker_id, "reset_ok", obs))
                     
@@ -256,6 +260,8 @@ class ParallelHabitatCollector:
         scene_ids: Optional[List[str]] = None,
         random_start: bool = True,
         episode_tags: Optional[List[str]] = None,
+        start_positions: Optional[List[Any]] = None,
+        start_rotations: Optional[List[Any]] = None,
     ) -> List[Observation]:
         """
         Reset all environments.
@@ -263,6 +269,8 @@ class ParallelHabitatCollector:
         Args:
             scene_ids: Optional list of scene IDs (one per worker; if not provided, use default)
             random_start: Whether to randomize start position
+            start_positions: Optional fixed start positions, one per worker
+            start_rotations: Optional fixed start rotations, one per worker
         
         Returns:
             List of observations, one per worker
@@ -272,11 +280,17 @@ class ParallelHabitatCollector:
         
         if episode_tags is None:
             episode_tags = [None] * self.num_workers
+        if start_positions is None:
+            start_positions = [None] * self.num_workers
+        if start_rotations is None:
+            start_rotations = [None] * self.num_workers
 
         # Send reset tasks to all workers
         for i, (task_q, scene_id) in enumerate(zip(self.task_queues, scene_ids)):
             episode_tag = episode_tags[i] if i < len(episode_tags) else None
-            task_q.put(("reset", scene_id, random_start, episode_tag))
+            start_position = start_positions[i] if i < len(start_positions) else None
+            start_rotation = start_rotations[i] if i < len(start_rotations) else None
+            task_q.put(("reset", scene_id, random_start, episode_tag, start_position, start_rotation))
         
         # Collect results
         observations = [None] * self.num_workers
@@ -302,12 +316,16 @@ class ParallelHabitatCollector:
         scene_id: Optional[str] = None,
         random_start: bool = True,
         episode_tag: Optional[str] = None,
+        start_position: Optional[Any] = None,
+        start_rotation: Optional[Any] = None,
     ) -> Observation:
         """Reset a single environment worker and return its observation."""
         if worker_id < 0 or worker_id >= self.num_workers:
             raise IndexError(f"worker_id out of range: {worker_id}")
 
-        self.task_queues[worker_id].put(("reset", scene_id, random_start, episode_tag))
+        self.task_queues[worker_id].put(
+            ("reset", scene_id, random_start, episode_tag, start_position, start_rotation)
+        )
 
         deadline = time.time() + self.timeout
         while True:

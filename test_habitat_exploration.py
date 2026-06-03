@@ -38,13 +38,13 @@ def test_exploration():
     print("=== Starting Habitat Exploration Test ===")
     
     # 1. Configuration
-    dataset_root = "/home/wgy/hm3d"
+    dataset_root = "/root/hm3d"
     # Adjust this path if the user's structure is different, but based on context:
     # "hm3d/scene_datasets/hm3d" matches
     scene_dataset_config_file = f"{dataset_root}/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json"
     
     # Using the specific scene 00855
-    scene_id = "/home/wgy/hm3d/scene_datasets/hm3d/val/00855-c5eTyR3Rxyh/c5eTyR3Rxyh.basis.glb"
+    scene_id = "/root/hm3d/scene_datasets/hm3d/val/00855-c5eTyR3Rxyh/c5eTyR3Rxyh.basis.glb"
     
     print(f"Dataset Config: {scene_dataset_config_file}")
     print(f"Scene ID: {scene_id}")
@@ -53,7 +53,7 @@ def test_exploration():
     if not os.path.exists(scene_dataset_config_file):
         print(f"Error: Config file not found {scene_dataset_config_file}")
         # Try finding it relative to current dir?
-        # The user's workspace indicates 'hm3d' is at /home/wgy/hm3d
+        # The user's workspace indicates 'hm3d' is at /root/hm3d
         pass 
 
     # 3. Initialize Environment

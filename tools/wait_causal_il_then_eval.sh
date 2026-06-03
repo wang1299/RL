@@ -6,7 +6,7 @@ if [ "$#" -lt 4 ]; then
     exit 2
 fi
 
-ROOT="/home/wgy/RL"
+ROOT="/root/RL"
 TRAIN_PID="$1"
 SAVE_DIR="$2"
 TIMESTAMP="$3"

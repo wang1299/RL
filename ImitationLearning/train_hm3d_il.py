@@ -21,9 +21,9 @@ from train_habitat_parallel import _load_config_mapping
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train HM3D/Habitat imitation policy.")
-    parser.add_argument("--conf_path", type=str, default="/home/wgy/RL/config")
-    parser.add_argument("--data_dir", type=str, default="/home/wgy/RL/components/data/hm3d_il_dataset")
-    parser.add_argument("--save_dir", type=str, default="/home/wgy/RL/components/data/model_weights/hm3d_imitation")
+    parser.add_argument("--conf_path", type=str, default="/root/RL/config")
+    parser.add_argument("--data_dir", type=str, default="/root/RL/components/data/hm3d_il_dataset")
+    parser.add_argument("--save_dir", type=str, default="/root/RL/components/data/model_weights/hm3d_imitation")
     parser.add_argument("--checkpoint_path_load", type=str, default=None)
     parser.add_argument("--encoder_path", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=30)

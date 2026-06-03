@@ -145,7 +145,7 @@ def _cache_one(path: Path, output_path: Path, agent: ImitationAgent, device: tor
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Cache HM3D expert RGB features.")
-    parser.add_argument("--conf_path", type=str, default="/home/wgy/RL/config")
+    parser.add_argument("--conf_path", type=str, default="/root/RL/config")
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--encoder_path", type=str, default=None)

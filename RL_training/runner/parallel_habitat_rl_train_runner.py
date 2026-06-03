@@ -18,7 +18,7 @@ import os
 import csv
 from collections import deque
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Callable, List, Optional, Dict, Any
 
 import numpy as np
 import torch
@@ -52,6 +52,7 @@ class ParallelHabitatRLTrainRunner:
         env_config: Optional[Dict[str, Any]] = None,
         scene_count: Optional[int] = None,
         env_gpu_ids: Optional[List[int]] = None,
+        best_checkpoint_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         self.agent = agent
         self.num_workers = num_workers
@@ -59,6 +60,8 @@ class ParallelHabitatRLTrainRunner:
         self.save_dir = save_dir
         self.detection_service = detection_service
         self.env_config = env_config or {}
+        self.best_checkpoint_callback = best_checkpoint_callback
+        self.best_checkpoint_score = float("-inf")
         self.base_scene_ids = [str(scene_id) for scene_id in (base_scene_ids or [])]
         self.scene_count = max(int(scene_count or len(base_scene_ids or []) or 1), 1)
         
@@ -100,6 +103,25 @@ class ParallelHabitatRLTrainRunner:
             float(self.env_config.get("turn_loop_escape_forward_min_prob", 0.0)),
             0.0,
         )
+        self.eval_no_progress_explore_enabled = bool(
+            self.env_config.get("eval_no_progress_explore_enabled", False)
+        )
+        self.eval_no_progress_window = max(
+            int(self.env_config.get("eval_no_progress_window", 160)),
+            1,
+        )
+        self.eval_no_progress_min_delta = max(
+            float(self.env_config.get("eval_no_progress_min_delta", 1e-4)),
+            0.0,
+        )
+        self.eval_no_progress_turn_steps = max(
+            int(self.env_config.get("eval_no_progress_turn_steps", 3)),
+            0,
+        )
+        self.eval_no_progress_forward_steps = max(
+            int(self.env_config.get("eval_no_progress_forward_steps", 35)),
+            1,
+        )
         self._detection_log_counter = 0
         
         # Create parallel environment collector
@@ -117,6 +139,8 @@ class ParallelHabitatRLTrainRunner:
         for key in [
             "width",
             "height",
+            "dino_width",
+            "dino_height",
             "instance_merge_dist",
             "coverage_cell_size",
             "nav_sample_points",
@@ -136,6 +160,10 @@ class ParallelHabitatRLTrainRunner:
             "no_progress_window",
             "no_progress_penalty",
             "no_progress_min_coverage_delta",
+            "stagnation_termination_window",
+            "stagnation_min_score",
+            "stagnation_min_coverage",
+            "stagnation_penalty",
             "turn_penalty",
             "stationary_turn_window",
             "stationary_turn_penalty",
@@ -145,6 +173,12 @@ class ParallelHabitatRLTrainRunner:
             "dino_max_box_aspect_ratio",
             "gt_validation_iou_threshold",
             "gt_validation_mode",
+            "mp3d_spatial_fallback",
+            "mp3d_spatial_fallback_min_overlap",
+            "mp3d_spatial_fallback_center",
+            "mp3d_same_label_center_fallback",
+            "mp3d_same_label_center_max_norm_dist",
+            "mp3d_category_agnostic_validation",
             "success_recall_threshold",
             "success_min_coverage",
             "success_reward",
@@ -184,6 +218,10 @@ class ParallelHabitatRLTrainRunner:
         self.per_env_blocked_forward_headings = [dict() for _ in range(num_workers)]
         self.per_env_no_move_counts = [0] * num_workers
         self.per_env_turn_loop_counts = [0] * num_workers
+        self.per_env_eval_progress_values = [None] * num_workers
+        self.per_env_eval_no_progress_counts = [0] * num_workers
+        self.per_env_eval_explore_queues = [[] for _ in range(num_workers)]
+        self.per_env_eval_explore_cycles = [0] * num_workers
         self.per_env_scene_indices = [i % self.scene_count for i in range(num_workers)]
         self.per_env_discovered_objects = [set() for _ in range(num_workers)]
         self.per_env_discovered_instances = [set() for _ in range(num_workers)]
@@ -559,7 +597,9 @@ class ParallelHabitatRLTrainRunner:
         excluded = 0
         semantic_iou_only = 0
         reject_reasons = {}
+        reject_pairs = {}
         labels = {}
+        match_modes = {}
 
         for detections in detection_batches:
             for det in detections or []:
@@ -572,21 +612,36 @@ class ParallelHabitatRLTrainRunner:
                 if label in self.reward_excluded_labels:
                     excluded += 1
                     continue
-                if det.get("gt_match_mode") == "semantic_iou_only":
-                    semantic_iou_only += 1
                 if det.get("is_gt_valid") is True:
                     valid += 1
+                    mode = str(det.get("gt_match_mode") or "unknown")
+                    match_modes[mode] = match_modes.get(mode, 0) + 1
+                    if mode == "semantic_iou_only":
+                        semantic_iou_only += 1
                 else:
                     reason = str(det.get("reject_reason") or "not_gt_valid")
                     reject_reasons[reason] = reject_reasons.get(reason, 0) + 1
+                    pair = det.get("reject_pair")
+                    if not pair:
+                        det_label = str(det.get("canonical_label") or det.get("label") or "unknown")
+                        gt_label = str(det.get("gt_label") or "None")
+                        gt_canonical = str(det.get("gt_canonical_label") or "None")
+                        try:
+                            gt_iou = float(det.get("gt_iou", 0.0))
+                        except Exception:
+                            gt_iou = 0.0
+                        pair = f"{det_label}->{gt_label}/{gt_canonical}@{gt_iou:.2f}:{reason}"
+                    reject_pairs[pair] = reject_pairs.get(pair, 0) + 1
 
         top_reasons = sorted(reject_reasons.items(), key=lambda item: item[1], reverse=True)[:4]
         top_labels = sorted(labels.items(), key=lambda item: item[1], reverse=True)[:5]
+        top_modes = sorted(match_modes.items(), key=lambda item: item[1], reverse=True)[:4]
+        top_pairs = sorted(reject_pairs.items(), key=lambda item: item[1], reverse=True)[:4]
         print(
             "[DINO] "
             f"step={self.global_step} total={total} valid={valid} low_score={low_score} "
             f"excluded={excluded} semantic_iou_only={semantic_iou_only} "
-            f"top_rejects={top_reasons} top_labels={top_labels}"
+            f"top_rejects={top_reasons} top_labels={top_labels} match_modes={top_modes} top_pairs={top_pairs}"
         )
 
     def _apply_detection_reward(self, env_id: int, obs: Observation, detections):
@@ -657,6 +712,63 @@ class ParallelHabitatRLTrainRunner:
             score >= self.success_recall_threshold
             and coverage >= self.success_min_coverage
         )
+
+    def _update_eval_progress_state(self, env_id: int, obs: Observation):
+        if not self.eval_no_progress_explore_enabled:
+            return
+        if obs is None or obs.info is None:
+            return
+        current = (
+            float(obs.info.get("score", 0.0) or 0.0),
+            float(obs.info.get("coverage", 0.0) or 0.0),
+            float(obs.info.get("path_coverage", 0.0) or 0.0),
+            float(obs.info.get("visible_coverage", 0.0) or 0.0),
+        )
+        previous = self.per_env_eval_progress_values[env_id]
+        self.per_env_eval_progress_values[env_id] = current
+        if previous is None:
+            self.per_env_eval_no_progress_counts[env_id] = 0
+            return
+        gain = max(curr - prev for curr, prev in zip(current, previous))
+        if gain > self.eval_no_progress_min_delta:
+            self.per_env_eval_no_progress_counts[env_id] = 0
+            self.per_env_eval_explore_queues[env_id] = []
+        else:
+            self.per_env_eval_no_progress_counts[env_id] += 1
+
+    def _build_eval_explore_queue(self, env_id: int):
+        turn_action = self.per_env_eval_explore_cycles[env_id] % 2
+        self.per_env_eval_explore_cycles[env_id] += 1
+        return (
+            [turn_action] * self.eval_no_progress_turn_steps
+            + [2] * self.eval_no_progress_forward_steps
+        )
+
+    def _apply_eval_no_progress_exploration(self, actions: List[int]):
+        if not self.eval_no_progress_explore_enabled:
+            return actions
+        for env_id, action in enumerate(actions):
+            queue = self.per_env_eval_explore_queues[env_id]
+            if (
+                not queue
+                and self.per_env_eval_no_progress_counts[env_id] >= self.eval_no_progress_window
+            ):
+                queue = self._build_eval_explore_queue(env_id)
+                self.per_env_eval_explore_queues[env_id] = queue
+                self.per_env_eval_no_progress_counts[env_id] = 0
+            if not queue:
+                continue
+            policy_action = int(action)
+            explore_action = int(queue.pop(0))
+            actions[env_id] = explore_action
+            if env_id < len(self.per_env_action_diagnostics):
+                diag = self.per_env_action_diagnostics[env_id]
+                diag["action"] = explore_action
+                diag["policy_action"] = policy_action
+                diag["action_overridden"] = int(explore_action != policy_action)
+                diag["eval_no_progress_explore"] = 1
+                diag["eval_no_progress_queue"] = len(queue)
+        return actions
     
     def _get_batch_actions(self, obs_list: List[Observation], deterministic: bool = False):
         """
@@ -886,6 +998,10 @@ class ParallelHabitatRLTrainRunner:
         self.per_env_blocked_forward_headings = [dict() for _ in range(self.num_workers)]
         self.per_env_no_move_counts = [0] * self.num_workers
         self.per_env_turn_loop_counts = [0] * self.num_workers
+        self.per_env_eval_progress_values = [None] * self.num_workers
+        self.per_env_eval_no_progress_counts = [0] * self.num_workers
+        self.per_env_eval_explore_queues = [[] for _ in range(self.num_workers)]
+        self.per_env_eval_explore_cycles = [0] * self.num_workers
         self.per_env_discovered_objects = [set() for _ in range(self.num_workers)]
         self.per_env_discovered_instances = [set() for _ in range(self.num_workers)]
         self.per_env_discovered_gt_ids = [set() for _ in range(self.num_workers)]
@@ -1154,6 +1270,30 @@ class ParallelHabitatRLTrainRunner:
                             f"PathCov: {avg_path_coverage:.2f}, VisCov: {avg_visible_coverage:.2f}, "
                             f"Avg Steps: {avg_steps:.1f}, Max Score: {max_score:.2f}"
                         )
+                        if (
+                            self.best_checkpoint_callback is not None
+                            and avg_score > self.best_checkpoint_score
+                        ):
+                            self.best_checkpoint_score = float(avg_score)
+                            try:
+                                self.best_checkpoint_callback(
+                                    {
+                                        "avg_score": float(avg_score),
+                                        "avg_coverage": float(avg_coverage),
+                                        "avg_path_coverage": float(avg_path_coverage),
+                                        "avg_visible_coverage": float(avg_visible_coverage),
+                                        "avg_steps": float(avg_steps),
+                                        "max_score": float(max_score),
+                                        "update_index": int(
+                                            total_steps_collected
+                                            // max(self.num_steps_per_rollout * self.num_workers, 1)
+                                        ),
+                                        "episode_count": int(episode_count),
+                                        "total_steps_collected": int(total_steps_collected),
+                                    }
+                                )
+                            except Exception as exc:
+                                print(f"[WARN] Failed to save best-score checkpoint: {exc}")
         
         except KeyboardInterrupt:
             self.was_interrupted = True
@@ -1174,6 +1314,8 @@ class ParallelHabitatRLTrainRunner:
         output_csv: Optional[str] = None,
         random_start: bool = True,
         stop_on_success: bool = True,
+        eval_start_position: Optional[List[float]] = None,
+        eval_start_rotation: Optional[float] = None,
     ):
         """
         Run policy rollouts in the Habitat RL environment without any optimizer update.
@@ -1240,10 +1382,22 @@ class ParallelHabitatRLTrainRunner:
                 self._episode_tag(env_id, scene_index)
                 for env_id, scene_index in enumerate(self.per_env_scene_indices)
             ]
+            fixed_start_positions = (
+                [eval_start_position] * self.num_workers
+                if eval_start_position is not None
+                else None
+            )
+            fixed_start_rotations = (
+                [eval_start_rotation] * self.num_workers
+                if eval_start_rotation is not None
+                else None
+            )
             obs_list = self.env_collector.reset_all(
                 scene_ids=initial_scene_ids,
                 random_start=random_start,
                 episode_tags=initial_episode_tags,
+                start_positions=fixed_start_positions,
+                start_rotations=fixed_start_rotations,
             )
         except Exception as exc:
             print(f"[ERROR] Failed to reset environments for evaluation: {exc}")
@@ -1272,6 +1426,7 @@ class ParallelHabitatRLTrainRunner:
         try:
             while episode_count < self.total_episodes:
                 actions, _values = self._get_batch_actions(obs_list, deterministic=deterministic)
+                actions = self._apply_eval_no_progress_exploration(actions)
 
                 try:
                     obs_list = self.env_collector.step_all(actions, self.per_env_action_diagnostics)
@@ -1303,6 +1458,7 @@ class ParallelHabitatRLTrainRunner:
                     if obs.info is None:
                         obs.info = {}
                     obs.info["score"] = float(score)
+                    self._update_eval_progress_state(env_id, obs)
 
                     success = self._is_success(obs, score)
                     obs.info["success"] = bool(success)
@@ -1436,6 +1592,8 @@ class ParallelHabitatRLTrainRunner:
                             scene_id=str(next_scene_index + 1),
                             random_start=random_start,
                             episode_tag=self._episode_tag(env_id, next_scene_index),
+                            start_position=eval_start_position,
+                            start_rotation=eval_start_rotation,
                         )
 
                         self.per_env_discovered_objects[env_id].clear()
@@ -1449,6 +1607,10 @@ class ParallelHabitatRLTrainRunner:
                         self.per_env_blocked_forward_headings[env_id] = {}
                         self.per_env_no_move_counts[env_id] = 0
                         self.per_env_turn_loop_counts[env_id] = 0
+                        self.per_env_eval_progress_values[env_id] = None
+                        self.per_env_eval_no_progress_counts[env_id] = 0
+                        self.per_env_eval_explore_queues[env_id] = []
+                        self.per_env_eval_explore_cycles[env_id] = 0
                         self.per_env_hidden_states[env_id]["lssg"] = None
                         self.per_env_hidden_states[env_id]["gssg"] = None
                         self.per_env_hidden_states[env_id]["policy"] = None

@@ -8,8 +8,8 @@ from pathlib import Path
 import tempfile
 import torch
 # === [关键修改] 先把项目根目录加进去，再 import ===
-sys.path.append("/home/wgy/RL") 
-sys.path.append("/home/wgy/GroundingDINO")
+sys.path.append("/root/RL") 
+sys.path.append("/root/GroundingDINO")
 # === [新增 import] ===
 # from components.detectors.grounding_dino_adapter import GroundingDINODetector
 
@@ -139,7 +139,7 @@ def main(config):
     # 建议将路径写在 config 文件里，这里为了演示直接写死或者用 argparse
     dino_detector = None
     if args.save_frames_to is None:
-        args.save_frames_to = "/home/wgy/RL/train_png"
+        args.save_frames_to = "/root/RL/train_png"
 
     # Always keep a run-level folder like train_YYYYmmdd_HHMMSS under train_png.
     # If caller already passes a train_* folder (e.g., run_train.sh), keep it as-is.
@@ -162,8 +162,8 @@ def main(config):
         if dino_device is not None:
             print(f"[INFO] Grounding DINO device: {dino_device}")
         # ！！！请修改下面的路径为你的真实路径！！！
-        dino_config = "/home/wgy/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-        dino_weights = "/home/wgy/GroundingDINO/weights/groundingdino_swint_ogc.pth" # 你的 .pth 文件路径
+        dino_config = "/root/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+        dino_weights = "/root/GroundingDINO/weights/groundingdino_swint_ogc.pth" # 你的 .pth 文件路径
         
         if not os.path.exists(dino_weights):
             print(f"[WARNING] DINO weights not found at {dino_weights}. Running without detector.")
@@ -215,7 +215,7 @@ def main(config):
     if args.use_habitat:
         print("[INFO] Using HabitatEnv for TRAINING...")
         from components.environments.habitat_env import HabitatEnv
-        HM3D_ROOT = "/home/wgy/hm3d/scene_datasets/hm3d"
+        HM3D_ROOT = "/root/hm3d/scene_datasets/hm3d"
         habitat_scene_ids, missing_scenes = _resolve_habitat_scene_list(
             HM3D_ROOT,
             single_scene=args.habitat_scene,

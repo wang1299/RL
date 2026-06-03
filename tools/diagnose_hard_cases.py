@@ -283,12 +283,12 @@ def main() -> None:
     parser.add_argument(
         "--expert-dir",
         type=Path,
-        default=Path("/home/wgy/RL/components/data/hm3d_viewpoint_il_dataset_poi4yaw_geometric_20260524_172033_features"),
+        default=Path("/root/RL/components/data/hm3d_viewpoint_il_dataset_poi4yaw_geometric_20260524_172033_features"),
     )
     parser.add_argument(
         "--rl-dir",
         type=Path,
-        default=Path("/home/wgy/RL/train_png/parallel_train_20260531_195606"),
+        default=Path("/root/RL/train_png/parallel_train_20260531_195606"),
     )
     args = parser.parse_args()
 
